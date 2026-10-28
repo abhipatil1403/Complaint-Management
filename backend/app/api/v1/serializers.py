@@ -119,6 +119,72 @@ def submission_detail(row: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def verification_task_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Queue/detail shape for one verification task.
+
+    Contains provenance and workflow metadata only. Complaint subject and body
+    text are never selected by the underlying projection.
+    """
+    return {
+        "id": row["out_task_id"],
+        "status": row["out_status"],
+        "priority": row["out_priority"],
+        "submitted_institution_name": row["out_submitted_institution_name"],
+        "submitted_permanent_id": row["out_submitted_permanent_id"],
+        "candidate_institution_id": row["out_candidate_institution_id"],
+        "candidate_count": row["out_candidate_count"] or 0,
+        "strongest_evidence": row["out_strongest_evidence"],
+        "assigned_to_user_id": row["out_assigned_to_user_id"],
+        "assigned_to_name": row["out_assigned_to_name"],
+        "reviewed_by_user_id": row["out_reviewed_by_user_id"],
+        "reviewed_by_name": row["out_reviewed_by_name"],
+        "resolved_institution_id": row["out_resolved_institution_id"],
+        "resolved_institution_name": row["out_resolved_institution_name"],
+        "resolution_notes": row["out_resolution_notes"],
+        "resolved_at": row["out_resolved_at"],
+        "created_at": row["out_created_at"],
+        "updated_at": row["out_updated_at"],
+        "age_days": row["out_age_days"],
+        "round_type": row["out_round_type"],
+        "requester_user_id": row["out_requester_user_id"],
+        "submission": {
+            "id": row["out_submission_id"],
+            "channel_code": row["out_channel_code"],
+            "channel_name": row["out_channel_name"],
+            "channel_is_simulated": bool(row["out_channel_is_simulated"]),
+            "external_reference": row["out_external_reference"],
+            "source_event_id": row["out_source_event_id"],
+            "received_at": row["out_received_at"],
+            "updated_at": row["out_submission_updated_at"],
+            "intake_status": row["out_intake_status"],
+            "original_language": row["out_original_language"],
+            "institution_name_as_submitted": row["out_institution_name_as_submitted"],
+            "submitted_permanent_id": row["out_submitted_permanent_id"],
+            "institution_id": row["out_submission_institution_id"],
+            "institution_official_name": row["out_submission_institution_name"],
+            "institution_permanent_id": row["out_submission_institution_permanent_id"],
+            "canonical_case_id": row["out_canonical_case_id"],
+        },
+    }
+
+
+def verification_candidate_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "institution_id": row["out_institution_id"],
+        "official_name": row["out_official_name"],
+        "permanent_id": row["out_permanent_id"],
+        "region_code": row["out_region_code"],
+        "region_name": row["out_region_name"],
+        "verification_status": row["out_verification_status"],
+        "is_active": bool(row["out_is_active"]),
+        "evidence": list(row["out_evidence"] or []),
+        "matched_alias_id": row["out_matched_alias_id"],
+        "matched_alias_name": row["out_matched_alias_name"],
+        "evidence_rank": row["out_evidence_rank"],
+        "is_eligible": bool(row["out_is_eligible"]),
+    }
+
+
 def bureau_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "id": row["id"],

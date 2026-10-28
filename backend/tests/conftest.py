@@ -36,9 +36,14 @@ INACTIVE_ID = UUID("99999999-9999-9999-9999-999999999999")
 UNPROVISIONED_ID = UUID("88888888-8888-8888-8888-888888888888")
 
 ALL_PHASE1 = frozenset(perms.PHASE1_PERMISSIONS)
-# Super Admin also holds the explicit Phase 2.1 intake capability. The Phase 1
-# catalogue is frozen, so the two catalogues stay separate.
-SUPER_PERMISSIONS = ALL_PHASE1 | frozenset(perms.PHASE2_ROLE_GRANTS[perms.SUPER_ADMIN])
+# Super Admin also holds the explicit Phase 2.1 intake and Phase 2.2
+# verification capabilities. The Phase 1 catalogue is frozen, so the
+# catalogues stay separate.
+SUPER_PERMISSIONS = (
+    ALL_PHASE1
+    | frozenset(perms.PHASE2_ROLE_GRANTS[perms.SUPER_ADMIN])
+    | frozenset(perms.PHASE2_VERIFICATION_ROLE_GRANTS[perms.SUPER_ADMIN])
+)
 
 
 def role_permissions(role_code: str) -> frozenset[str]:

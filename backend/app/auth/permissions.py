@@ -177,6 +177,25 @@ PHASE2_ROLE_GRANTS: dict[str, tuple[str, ...]] = {
 }
 
 
+# --- Phase 2.2 institution verification capability ----------------------
+# Kept separate from both earlier catalogues: Phase 1 and Phase 2.1 stay frozen.
+# The capability only reaches the human verification queue; it never grants
+# access to complaint content.
+INSTITUTION_VERIFY = "institution.verify"
+
+PHASE2_VERIFICATION_PERMISSIONS: dict[str, dict[str, str]] = {
+    INSTITUTION_VERIFY: {
+        "name": "Verify submitted institution identity",
+        "resource_type": "institution",
+        "action_type": "verify",
+    },
+}
+
+PHASE2_VERIFICATION_ROLE_GRANTS: dict[str, tuple[str, ...]] = {
+    SUPER_ADMIN: (INSTITUTION_VERIFY,),
+}
+
+
 def to_db_code(api_code: str) -> str:
     return api_code.strip().upper()
 

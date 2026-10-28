@@ -8,6 +8,7 @@ export function AppShell() {
   const { me, has, signOut } = useAuth();
 
   const navigation = [
+    { to: "/verification", label: "Verification", visible: has("institution.verify") },
     { to: "/intake", label: "Intake", visible: has("submission.view") },
     { to: "/institutions", label: "Institutions", visible: has("institution.view") },
     { to: "/bureaus", label: "Bureaus", visible: has("bureau.view") },
@@ -30,7 +31,7 @@ export function AppShell() {
           </span>
           <span>
             <strong>AICTE OneDesk</strong>
-            <small>Complaint monitoring — Phase 2.1</small>
+            <small>Complaint monitoring — Phase 2.2</small>
           </span>
         </Link>
 
@@ -66,7 +67,7 @@ export function AppShell() {
 
       <footer className="app-footer">
         <span>Demonstrator only. Illustrative demo data; not an official AICTE service.</span>
-        <span>Phase 2.1 — simulated intake and submission preservation.</span>
+        <span>Phase 2.2 — human institution verification &amp; identification queue.</span>
       </footer>
     </div>
   );

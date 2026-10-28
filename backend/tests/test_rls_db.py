@@ -12,9 +12,6 @@ They assume:
 * the Phase 1 migration has been applied, and
 * the connecting role may ``SET LOCAL ROLE authenticated`` / ``anon``
   (the Supabase ``postgres`` role can; a limited app role cannot).
-
-Every test runs inside a transaction that is always rolled back, so no data is
-created or modified.
 """
 
 from __future__ import annotations
@@ -25,7 +22,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -1186,21 +1183,30 @@ def test_public_intake_preserves_the_original_submission(conn) -> None:
         assert row["source_metadata"]["reference_origin"] == "demo_generated"
         assert row["source_metadata"]["source_submitted_at"] == "2026-10-20T04:55:00.000Z"
 
-        # A submission never creates a case, a duplicate candidate or a task.
+        # A submission never creates a case or a duplicate candidate. Phase 2.2
+        # auto-queues exactly one human institution-verification task for an
+        # unresolved submission.
         assert _intake_count(conn) == before + 1
         cases_after = conn.execute("select count(*) as total from public.cases").fetchone()["total"]
         assert cases_after == cases_before
-        for table in (
-            "duplicate_candidates",
-            "institution_verification_tasks",
-            "attachments",
-        ):
+        for table in ("duplicate_candidates", "attachments"):
             total = conn.execute(f'select count(*) as total from public."{table}"').fetchone()["total"]
             assert total == 0, table
+
+        conn.execute("reset role")
+        tasks = conn.execute(
+            "select id, status, candidate_institution_id, submitted_institution_name"
+            "  from public.institution_verification_tasks where submission_id = %s",
+            (result["submission_id"],),
+        ).fetchall()
+        assert len(tasks) == 1, tasks
+        assert tasks[0]["status"] == "pending"
+        assert tasks[0]["candidate_institution_id"] is None
 
 
 def test_public_intake_replay_and_conflict_do_not_duplicate(conn) -> None:
     with conn.transaction(force_rollback=True):
+        before = _intake_count(conn)
         created = _call_intake(conn)
         assert created["outcome"] == "created"
 
@@ -1220,7 +1226,7 @@ def test_public_intake_replay_and_conflict_do_not_duplicate(conn) -> None:
         second[7] = "evt-rls-0002"
         second[8] = "idem-rls-0002"
         assert _call_intake(conn, tuple(second))["outcome"] == "created"
-        assert _intake_count(conn) == 2
+        assert _intake_count(conn) == before + 2
 
 
 def test_public_intake_validation_failures_create_nothing(conn) -> None:
@@ -1387,4 +1393,398 @@ def test_concurrent_intake_calls_serialise_on_the_same_source_identity() -> None
             " where idempotency_key = 'idem-rls-concurrent'"
         ).fetchone()["total"]
     assert persisted == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.2 institution verification
+#
+# `authenticated` holds no privilege on the task table, so every probe goes
+# through the capability-gated SECURITY DEFINER surface. All writes below run
+# inside a transaction that is always rolled back.
+# ---------------------------------------------------------------------------
+VERIFICATION_TASK_ROWS = (
+    "public.institution_verification_task_rows(uuid, text, text, text, text, "
+    "text, integer, integer)"
+)
+VERIFICATION_COMMANDS = (
+    "public.decide_institution_verification(uuid, text, uuid, text, timestamptz)",
+    "public.request_institution_verification_round(uuid, text, timestamptz)",
+)
+# Every Phase 2.2 function except the frozen submission trigger.
+VERIFICATION_FUNCTIONS = (
+    "institution_match_candidates_internal",
+    "institution_verification_submission_metadata",
+    "institution_match_candidates",
+    "institution_verification_task_rows",
+    "correction_request_requester",
+    "decide_institution_verification",
+    "request_institution_verification_round",
+    "queue_institution_verification",
+    "guard_institution_verification_task",
+    "apply_institution_verification_outcome",
+    "guard_case_creation_open_round",
+)
+# The parser is a pure helper and the evidence matcher is internal; neither is
+# SECURITY DEFINER by design.
+NON_DEFINER_FUNCTIONS = {"correction_request_requester", "institution_match_candidates_internal"}
+
+
+def _verification_super_admin(accounts) -> dict:
+    super_admin = accounts["super"]
+    if super_admin is None:
+        pytest.skip("Phase 2.2 RLS tests need an active Super Admin account.")
+    return super_admin
+
+
+def _verified_institution(conn) -> UUID | None:
+    row = conn.execute(
+        "select id from public.institutions"
+        " where verification_status = 'verified' and is_active"
+        " order by created_at asc, id asc limit 1"
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def _insert_probe_submission(
+    conn: psycopg.Connection,
+    *,
+    institution_id: UUID | None = None,
+    intake_status: str = "awaiting_institution_verification",
+    institution_name: str = "Probe Institute",
+) -> UUID:
+    """Insert a submission directly as the owner, bypassing RLS but not triggers."""
+    row = conn.execute(
+        """
+        insert into public.submissions (
+            intake_channel_id, institution_id, institution_name_as_submitted,
+            subject, original_text, intake_status
+        )
+        select c.id, %s, %s, 'Probe subject', 'Probe complaint body', %s
+          from public.intake_channels c
+         order by c.code
+         limit 1
+        returning id
+        """,
+        (institution_id, institution_name, intake_status),
+    ).fetchone()
+    assert row is not None
+    return row["id"]
+
+
+def _insert_probe_task(
+    conn: psycopg.Connection,
+    submission_id: UUID,
+    *,
+    status: str = "pending",
+    notes: str | None = None,
+) -> UUID:
+    row = conn.execute(
+        """
+        insert into public.institution_verification_tasks
+            (submission_id, submitted_institution_name, status, priority, resolution_notes)
+        values (%s, 'Probe Institute', %s, 'normal', %s)
+        returning id
+        """,
+        (submission_id, status, notes),
+    ).fetchone()
+    assert row is not None
+    return row["id"]
+
+
+def test_authenticated_holds_no_privilege_on_the_verification_task_table(conn, accounts) -> None:
+    """The queue table is unreachable from the Data API in both directions."""
+    grants = conn.execute(
+        """
+        select p,
+               has_table_privilege('authenticated',
+                                   'public.institution_verification_tasks', p) as granted
+          from unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE',
+                            'REFERENCES','TRIGGER','MAINTAIN']) p
+        """
+    ).fetchall()
+    assert [row["p"] for row in grants if row["granted"]] == []
+
+    with conn.transaction(force_rollback=True):
+        _act_as(conn, accounts["me"]["id"])
+        for statement in (
+            "select id from public.institution_verification_tasks limit 1",
+            "insert into public.institution_verification_tasks"
+            " (submission_id, submitted_institution_name)"
+            " values (gen_random_uuid(), 'Forbidden')",
+            "update public.institution_verification_tasks set status = 'rejected' where false",
+            "delete from public.institution_verification_tasks where false",
+        ):
+            conn.execute("savepoint verification_priv")
+            with pytest.raises(pg_errors.InsufficientPrivilege):
+                conn.execute(statement)
+            conn.execute("rollback to savepoint verification_priv")
+
+
+def test_verification_surface_is_a_pinned_definer_with_narrow_grants(conn) -> None:
+    rows = conn.execute(
+        """
+        select p.proname,
+               p.prosecdef,
+               coalesce(p.proconfig, array[]::text[]) as config,
+               pg_get_userbyid(p.proowner) as owner
+          from pg_proc p
+          join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname = any(%s)
+        """,
+        (list(VERIFICATION_FUNCTIONS),),
+    ).fetchall()
+    assert {row["proname"] for row in rows} == set(VERIFICATION_FUNCTIONS)
+
+    for row in rows:
+        assert row["owner"] == "postgres", row["proname"]
+        assert 'search_path=""' in row["config"], row["proname"]
+        if row["proname"] in NON_DEFINER_FUNCTIONS:
+            assert row["prosecdef"] is False, row["proname"]
+        else:
+            assert row["prosecdef"] is True, row["proname"]
+
+    # Gated read/command surface is executable by authenticated ...
+    for signature in (VERIFICATION_TASK_ROWS, *VERIFICATION_COMMANDS):
+        assert conn.execute(
+            "select has_function_privilege('authenticated', %s, 'EXECUTE') as granted",
+            (signature,),
+        ).fetchone()["granted"] is True, signature
+
+    # ... while the internal matcher and marker parser are not reachable at all.
+    for role in ("anon", "authenticated", "service_role"):
+        for signature in (
+            "public.institution_match_candidates_internal(text, text, integer)",
+            "public.correction_request_requester(text)",
+        ):
+            assert conn.execute(
+                "select has_function_privilege(%s, %s, 'EXECUTE') as granted",
+                (role, signature),
+            ).fetchone()["granted"] is False, (role, signature)
+
+    for role in ("anon", "service_role"):
+        for signature in (
+            VERIFICATION_TASK_ROWS,
+            *VERIFICATION_COMMANDS,
+            "public.institution_match_candidates(uuid)",
+            "public.institution_verification_submission_metadata(uuid)",
+        ):
+            assert conn.execute(
+                "select has_function_privilege(%s, %s, 'EXECUTE') as granted",
+                (role, signature),
+            ).fetchone()["granted"] is False, (role, signature)
+
+
+def test_verification_queue_requires_the_global_capability(conn, accounts) -> None:
+    super_admin = _verification_super_admin(accounts)
+    with conn.transaction(force_rollback=True):
+        _act_as(conn, accounts["me"]["id"])
+        conn.execute("savepoint queue_capability")
+        with pytest.raises(pg_errors.InsufficientPrivilege):
+            conn.execute("select * from public.institution_verification_task_rows()")
+        conn.execute("rollback to savepoint queue_capability")
+
+        # The decision command is gated before it looks anything up.
+        conn.execute("savepoint decide_capability")
+        with pytest.raises(pg_errors.InsufficientPrivilege):
+            conn.execute(
+                "select public.decide_institution_verification(%s, 'reject', null, 'x')",
+                (uuid4(),),
+            )
+        conn.execute("rollback to savepoint decide_capability")
+
+        _act_as(conn, super_admin["id"])
+        rows = conn.execute("select * from public.institution_verification_task_rows()").fetchall()
+        assert isinstance(rows, list)
+
+
+def test_verification_queue_never_returns_complaint_content(conn, accounts) -> None:
+    super_admin = _verification_super_admin(accounts)
+    with conn.transaction(force_rollback=True):
+        created = _call_intake(conn)
+        submission_id = UUID(created["submission_id"])
+
+        _act_as(conn, super_admin["id"])
+        rows = conn.execute(
+            "select * from public.institution_verification_task_rows"
+            "(null, 'all', 'all', null, null, 'recent', 100, 0)"
+        ).fetchall()
+        task = next(row for row in rows if row["out_submission_id"] == submission_id)
+
+        forbidden = {"subject", "original_text", "normalized_text", "content_fingerprint"}
+        assert forbidden.isdisjoint(task.keys())
+
+        metadata = conn.execute(
+            "select * from public.institution_verification_submission_metadata(%s)",
+            (submission_id,),
+        ).fetchall()
+        assert len(metadata) == 1
+        assert forbidden.isdisjoint(metadata[0].keys())
+
+        # The task is the only one auto-created by the submission.
+        conn.execute("reset role")
+        tasks = conn.execute("select id from public.institution_verification_tasks"
+                             " where submission_id = %s", (submission_id,)).fetchall()
+        assert len(tasks) == 1
+        assert task["out_round_type"] == "new_round"
+
+
+def test_canonical_case_creation_is_blocked_by_an_open_round(conn) -> None:
+    """A populated institution_id must not let a case bypass verification."""
+    institution_id = _verified_institution(conn)
+    if institution_id is None:
+        pytest.skip("Phase 2.2 RLS tests need one verified active institution.")
+
+    with conn.transaction(force_rollback=True):
+        submission_id = _insert_probe_submission(
+            conn,
+            institution_id=institution_id,
+            intake_status="ready_for_case_creation",
+        )
+        _insert_probe_task(conn, submission_id, status="pending")
+
+        conn.execute("savepoint case_guard")
+        with pytest.raises((pg_errors.RaiseException, pg_errors.ProgrammingError)) as raised:
+            conn.execute(
+                "insert into public.cases"
+                " (case_number, institution_id, title, description, source_submission_id)"
+                " values ('P22-OPEN-ROUND', %s, 'Probe case', 'Probe case body', %s)",
+                (institution_id, submission_id),
+            )
+        assert raised.value.sqlstate == "P2V10"
+        conn.execute("rollback to savepoint case_guard")
+
+        # The status branch alone also blocks, even with no task row.
+        status_only = _insert_probe_submission(
+            conn,
+            institution_id=institution_id,
+            intake_status="awaiting_institution_verification",
+        )
+        conn.execute("savepoint case_status_guard")
+        with pytest.raises((pg_errors.RaiseException, pg_errors.ProgrammingError)) as raised:
+            conn.execute(
+                "insert into public.cases"
+                " (case_number, institution_id, title, description, source_submission_id)"
+                " values ('P22-AWAITING', %s, 'Probe case', 'Probe case body', %s)",
+                (institution_id, status_only),
+            )
+        assert raised.value.sqlstate == "P2V10"
+        conn.execute("rollback to savepoint case_status_guard")
+
+        # Regression: an active correction round with institution_id populated also blocks.
+        corr_sub = _insert_probe_submission(
+            conn,
+            institution_id=institution_id,
+            intake_status="ready_for_case_creation",
+        )
+        corr_marker = "[correction-request] requester=00000000-0000-0000-0000-000000000001 at=2026-10-29T10:00:00.000Z"
+        _insert_probe_task(conn, corr_sub, status="in_review", notes=corr_marker)
+        conn.execute("savepoint case_correction_guard")
+        with pytest.raises((pg_errors.RaiseException, pg_errors.ProgrammingError)) as raised:
+            conn.execute(
+                "insert into public.cases"
+                " (case_number, institution_id, title, description, source_submission_id)"
+                " values ('P22-CORR-ROUND', %s, 'Probe case', 'Probe case body', %s)",
+                (institution_id, corr_sub),
+            )
+        assert raised.value.sqlstate == "P2V10"
+        conn.execute("rollback to savepoint case_correction_guard")
+
+        # Positive control: once the round is resolved, a case is allowed.
+        resolved = _insert_probe_submission(
+            conn,
+            institution_id=institution_id,
+            intake_status="ready_for_case_creation",
+        )
+        conn.execute(
+            "insert into public.institution_verification_tasks"
+            " (submission_id, submitted_institution_name, status, resolved_at,"
+            "  reviewed_by_user_id, resolution_notes)"
+            " values (%s, 'Probe Institute', 'rejected', now(), null, 'No match')",
+            (resolved,),
+        )
+        case_row = conn.execute(
+            "insert into public.cases"
+            " (case_number, institution_id, title, description, source_submission_id)"
+            " values ('P22-RESOLVED', %s, 'Probe case', 'Probe case body', %s)"
+            " returning id",
+            (institution_id, resolved),
+        ).fetchone()
+        assert case_row is not None
+        # Nothing above changed the preserved submission.
+        assert conn.execute(
+            "select canonical_case_id from public.submissions where id = %s", (submission_id,)
+        ).fetchone()["canonical_case_id"] is None
+
+
+def test_correction_round_requires_an_independent_reviewer(conn, accounts) -> None:
+    super_admin = _verification_super_admin(accounts)
+    institution_id = _verified_institution(conn)
+    if institution_id is None:
+        pytest.skip("Phase 2.2 RLS tests need one verified active institution.")
+
+    marker = (
+        f"[correction-request] requester={super_admin['id']} "
+        "at=2026-10-29T10:00:00.000Z"
+    )
+    with conn.transaction(force_rollback=True):
+        submission_id = _insert_probe_submission(conn, institution_id=institution_id)
+        task_id = _insert_probe_task(conn, submission_id, status="in_review", notes=marker)
+
+        conn.execute("savepoint self_confirm")
+        with pytest.raises((pg_errors.RaiseException, pg_errors.ProgrammingError)) as raised:
+            conn.execute(
+                "update public.institution_verification_tasks"
+                "   set status = 'verified', resolved_at = now(),"
+                "       resolved_institution_id = %s, reviewed_by_user_id = %s,"
+                "       resolution_notes = %s || E'\\nConfirmed'"
+                " where id = %s",
+                (institution_id, super_admin["id"], marker, task_id),
+            )
+        assert raised.value.sqlstate == "P2V14"
+        conn.execute("rollback to savepoint self_confirm")
+
+        # A correction round with no requester record fails closed.
+        no_marker_sub = _insert_probe_submission(conn, institution_id=institution_id)
+        no_marker_id = _insert_probe_task(
+            conn, no_marker_sub, status="in_review", notes="No requester record"
+        )
+        conn.execute("savepoint missing_marker")
+        with pytest.raises((pg_errors.RaiseException, pg_errors.ProgrammingError)) as raised:
+            conn.execute(
+                "update public.institution_verification_tasks"
+                "   set status = 'verified', resolved_at = now(),"
+                "       resolved_institution_id = %s, reviewed_by_user_id = %s"
+                " where id = %s",
+                (institution_id, super_admin["id"], no_marker_id),
+            )
+        assert raised.value.sqlstate == "P2V05"
+        conn.execute("rollback to savepoint missing_marker")
+
+
+def test_correction_request_marker_parser_fails_closed(conn) -> None:
+    requester = uuid4()
+    good = f"[correction-request] requester={requester} at=2026-10-29T10:00:00.000Z"
+
+    with conn.transaction(force_rollback=True):
+        assert conn.execute(
+            "select public.correction_request_requester(%s) as requester", (good,)
+        ).fetchone()["requester"] == requester
+        assert conn.execute(
+            "select public.correction_request_requester(%s) as requester", ("plain notes",)
+        ).fetchone()["requester"] is None
+
+        for malformed in (
+            good + "\n" + good,
+            "note\n" + good,
+            "[correction-request] requester=not-a-uuid at=2026-10-29T10:00:00.000Z",
+            f"[correction-request] requester={requester}",
+        ):
+            conn.execute("savepoint marker_parser")
+            with pytest.raises((pg_errors.RaiseException, pg_errors.ProgrammingError)) as raised:
+                conn.execute(
+                    "select public.correction_request_requester(%s) as requester",
+                    (malformed,),
+                )
+            assert raised.value.sqlstate == "P2V05", malformed
+            conn.execute("rollback to savepoint marker_parser")
 

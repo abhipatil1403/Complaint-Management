@@ -17,6 +17,8 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 import { RegionsPage } from "./pages/RegionsPage";
 import { SignInPage } from "./pages/SignInPage";
 import { UserDetailPage } from "./pages/UserDetailPage";
+import { VerificationDetailPage } from "./pages/VerificationDetailPage";
+import { VerificationPage } from "./pages/VerificationPage";
 
 export function App() {
   return (
@@ -30,6 +32,8 @@ export function App() {
           <Route element={<RequireAuth />}>
             <Route element={<AppShell />}>
               <Route index element={<HomePage />} />
+              <Route path="verification" element={<VerificationPage />} />
+              <Route path="verification/tasks/:taskId" element={<VerificationDetailPage />} />
               <Route path="intake" element={<IntakePage />} />
               <Route path="intake/:submissionId" element={<IntakeDetailPage />} />
               <Route path="institutions" element={<InstitutionsPage />} />

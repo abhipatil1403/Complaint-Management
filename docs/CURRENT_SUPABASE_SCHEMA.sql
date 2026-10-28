@@ -14,28 +14,28 @@
 --     phase2_* RLS policies, and public.create_demo_submission() as a
 --     SECURITY DEFINER function with search_path = '' and an explicit caller
 --     allowlist.
+--   * 0004_phase2_institution_verification.sql - institution evidence matching,
+--     human verification queue, decision command, correction round workflow,
+--     guard triggers and case creation protection.
 --
--- Effective intake grants after 0003:
---   * anon: no table privilege anywhere in public and no EXECUTE on the
---     intake function;
---   * authenticated: SELECT only on submissions and intake_channels (no
---     INSERT/UPDATE/DELETE), and no EXECUTE on the intake function;
---   * one_desk_intake: no table privilege at all; EXECUTE on the one
---     insert-only intake function;
---   * postgres: function owner only. Service-role credentials are never used
---     by the browser.
+-- Effective grants after 0004:
+--   * anon: no table privilege anywhere in public and no EXECUTE on verification or intake functions;
+--   * authenticated: no privilege on institution_verification_tasks (all access through capability-gated definer functions), SELECT only on submissions and intake_channels;
+--   * one_desk_intake: no table privilege at all; EXECUTE on the one insert-only intake function;
+--   * postgres: function owner only. Service-role credentials are never used by the browser.
 -- The ALTER DEFAULT PRIVILEGES statements for anon/authenticated at the end of
 -- this file are Supabase project defaults for future objects; they grant nothing
--- on the existing tables and do not reflect a table grant. 0003 explicitly
--- revokes the default EXECUTE grant on the new function.
+-- on the existing tables and do not reflect a table grant. 0003 and 0004 explicitly
+-- revoke default EXECUTE grants on new functions.
 --
 -- Schema only: no rows, secrets or connection strings are included.
 --
+
 --
 -- PostgreSQL database dump
 --
 
-\restrict u7EBgjloR529Sd1AKqGspQLmzEoII5ExLbxeXJHuVMaEmbHG7CeuFcEH3z3FFQj
+\restrict 5EbwqoC8hPNvmHw15TGTzlVYDtOupNUqJewfL4NLzfshxR6ykPUMkdJDeLtyL4S
 
 -- Dumped from database version 17.11
 -- Dumped by pg_dump version 18.1
@@ -81,6 +81,44 @@ $$;
 
 
 ALTER FUNCTION public.active_bureau_id() OWNER TO postgres;
+
+--
+-- Name: apply_institution_verification_outcome(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.apply_institution_verification_outcome() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    AS $$
+declare
+    v_updated integer;
+begin
+    if new.status <> 'verified' or old.status = 'verified' then
+        return null;
+    end if;
+
+    update public.submissions
+       set institution_id = new.resolved_institution_id,
+           intake_status  = 'awaiting_duplicate_review'
+     where id = new.submission_id
+       and canonical_case_id is null
+       and intake_status in ('received',
+                             'awaiting_institution_verification',
+                             'awaiting_duplicate_review');
+
+    get diagnostics v_updated = row_count;
+
+    if v_updated <> 1 then
+        raise exception 'The submission could not be associated with the verified institution'
+            using errcode = 'P2V05';
+    end if;
+
+    return null;
+end;
+$$;
+
+
+ALTER FUNCTION public.apply_institution_verification_outcome() OWNER TO postgres;
 
 --
 -- Name: assert_global_administrator_remains(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -267,6 +305,54 @@ $$;
 
 
 ALTER FUNCTION public.auth_uid() OWNER TO postgres;
+
+--
+-- Name: correction_request_requester(text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.correction_request_requester(p_notes text) RETURNS uuid
+    LANGUAGE plpgsql IMMUTABLE
+    SET search_path TO ''
+    AS $$
+declare
+    c_token constant text := '[correction-request]';
+    v_count integer;
+    v_requester uuid;
+begin
+    if p_notes is null or btrim(p_notes) = '' then
+        return null;
+    end if;
+
+    v_count := (length(p_notes) - length(replace(p_notes, c_token, ''))) / length(c_token);
+
+    if v_count = 0 then
+        return null;
+    end if;
+    if v_count > 1 then
+        raise exception 'The correction request record is duplicated or ambiguous'
+            using errcode = 'P2V05';
+    end if;
+    if left(p_notes, length(c_token)) <> c_token then
+        raise exception 'The correction request record is not the first line'
+            using errcode = 'P2V05';
+    end if;
+
+    v_requester := substring(
+        p_notes
+        from '^\[correction-request\] requester=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z'
+    )::uuid;
+
+    if v_requester is null then
+        raise exception 'The correction request record is malformed'
+            using errcode = 'P2V05';
+    end if;
+
+    return v_requester;
+end;
+$$;
+
+
+ALTER FUNCTION public.correction_request_requester(p_notes text) OWNER TO postgres;
 
 --
 -- Name: create_demo_submission(text, text, text, text, text, text, text, text, text, timestamp with time zone, boolean); Type: FUNCTION; Schema: public; Owner: postgres
@@ -680,6 +766,421 @@ $$;
 ALTER FUNCTION public.create_demo_submission(p_channel_code text, p_institution_permanent_id text, p_institution_name_as_submitted text, p_subject text, p_original_text text, p_original_language text, p_category_code text, p_source_event_id text, p_idempotency_key text, p_source_submitted_at timestamp with time zone, p_consent_acknowledged boolean) OWNER TO postgres;
 
 --
+-- Name: decide_institution_verification(uuid, text, uuid, text, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.decide_institution_verification(p_task_id uuid, p_action text, p_institution_id uuid DEFAULT NULL::uuid, p_reason text DEFAULT NULL::text, p_expected_updated_at timestamp with time zone DEFAULT NULL::timestamp with time zone) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    SET statement_timeout TO '15s'
+    SET lock_timeout TO '5s'
+    AS $$
+declare
+    v_actor         uuid;
+    v_task          public.institution_verification_tasks%rowtype;
+    v_sub           public.submissions%rowtype;
+    v_submission_id uuid;
+    v_reason        text;
+    v_notes         text;
+    v_eligible      boolean;
+    v_prior_name    text;
+    v_prior_pid     text;
+    v_requester     uuid;
+begin
+    if public.has_global_permission('INSTITUTION.VERIFY') is not true then
+        raise exception 'The INSTITUTION.VERIFY capability is required'
+            using errcode = '42501';
+    end if;
+
+    v_actor := public.auth_uid();
+    if v_actor is null then
+        raise exception 'An authenticated caller is required' using errcode = '42501';
+    end if;
+    if not exists (
+        select 1 from public.users u
+         where u.id = v_actor and u.account_status = 'active'
+    ) then
+        raise exception 'The caller account is not active' using errcode = '42501';
+    end if;
+
+    if p_action not in ('confirm','reject','request_information','assign_to_me','unassign') then
+        raise exception 'Unknown verification action: %', p_action using errcode = 'P2V03';
+    end if;
+
+    -- Lock order step 1 target. `submission_id` is immutable, so this unlocked
+    -- read cannot be stale with respect to the lock we are about to take.
+    select t.submission_id
+      into v_submission_id
+      from public.institution_verification_tasks t
+     where t.id = p_task_id;
+
+    if not found then
+        raise exception 'Verification task not found' using errcode = 'P2V02';
+    end if;
+
+    -- Lock order step 1.
+    select * into v_sub
+      from public.submissions
+     where id = v_submission_id
+       for update;
+
+    if not found then
+        raise exception 'Submission not found' using errcode = 'P2V02';
+    end if;
+
+    -- Lock order step 2. The row is re-read after any lock wait, so the stale
+    -- check below compares against the latest committed version.
+    select * into v_task
+      from public.institution_verification_tasks
+     where id = p_task_id
+       for update;
+
+    if not found then
+        raise exception 'Verification task not found' using errcode = 'P2V02';
+    end if;
+    if v_task.submission_id <> v_submission_id then
+        raise exception 'Verification task submission changed concurrently' using errcode = 'P2V01';
+    end if;
+
+    if p_expected_updated_at is not null and v_task.updated_at <> p_expected_updated_at then
+        raise exception 'The verification task was modified by another reviewer'
+            using errcode = 'P2V01';
+    end if;
+    if v_task.status in ('verified','rejected') then
+        raise exception 'A resolved verification task is immutable' using errcode = 'P2V04';
+    end if;
+
+    v_reason := nullif(btrim(coalesce(p_reason, '')), '');
+
+    -- The correction requester record is the authoritative independence trail.
+    -- Parsing fails closed (P2V05) on a duplicated, misplaced or malformed
+    -- marker for every action, not only confirmation, so an ambiguous record
+    -- can never be resolved through an alternate path.
+    v_requester := public.correction_request_requester(v_task.resolution_notes);
+
+    if p_action = 'assign_to_me' then
+        update public.institution_verification_tasks
+           set assigned_to_user_id = v_actor,
+               status = case when status = 'pending' then 'in_review' else status end
+         where id = v_task.id;
+        return;
+    end if;
+
+    if p_action = 'unassign' then
+        update public.institution_verification_tasks
+           set assigned_to_user_id = null,
+               status = 'in_review'
+         where id = v_task.id;
+        return;
+    end if;
+
+    if p_action = 'request_information' then
+        if v_reason is null then
+            raise exception 'A reason is required' using errcode = 'P2V07';
+        end if;
+        update public.institution_verification_tasks
+           set status = 'in_review',
+               assigned_to_user_id = coalesce(assigned_to_user_id, v_actor),
+               resolution_notes = concat_ws(E'\n', nullif(resolution_notes, ''), v_reason)
+         where id = v_task.id;
+        return;
+    end if;
+
+    if p_action = 'reject' then
+        if v_reason is null then
+            raise exception 'A reason is required' using errcode = 'P2V07';
+        end if;
+        if p_institution_id is not null then
+            raise exception 'A rejection cannot carry an institution' using errcode = 'P2V08';
+        end if;
+        update public.institution_verification_tasks
+           set status = 'rejected',
+               resolved_at = now(),
+               resolved_institution_id = null,
+               reviewed_by_user_id = v_actor,
+               assigned_to_user_id = coalesce(assigned_to_user_id, v_actor),
+               resolution_notes = concat_ws(E'\n', nullif(resolution_notes, ''), v_reason)
+         where id = v_task.id;
+        return;
+    end if;
+
+    -- ---- confirm -----------------------------------------------------------
+    if p_institution_id is null then
+        raise exception 'Confirming requires an institution' using errcode = 'P2V08';
+    end if;
+    if v_reason is null then
+        raise exception 'A reason is required' using errcode = 'P2V07';
+    end if;
+
+    -- Fail closed. A submission that already carries an institution is being
+    -- re-examined, so the round MUST have a requester record. Without one, an
+    -- alternate path could confirm the association with no independent-review
+    -- trail, including a requester confirming their own correction.
+    if v_sub.institution_id is not null and v_requester is null then
+        raise exception 'A correction round is missing its requester record'
+            using errcode = 'P2V05';
+    end if;
+
+    if v_requester is not null and v_requester = v_actor then
+        raise exception 'The reviewer who requested this correction cannot confirm it'
+            using errcode = 'P2V14';
+    end if;
+
+    -- Lock order step 3. FOR SHARE keeps a concurrent institution update from
+    -- invalidating the eligibility check without blocking other confirmations.
+    select (i.verification_status = 'verified' and i.is_active)
+      into v_eligible
+      from public.institutions i
+     where i.id = p_institution_id
+       for share;
+
+    if v_eligible is distinct from true then
+        raise exception 'The selected institution must be verified and active'
+            using errcode = 'P2V09';
+    end if;
+
+    if v_sub.canonical_case_id is not null then
+        raise exception 'The submission is already associated with a canonical case'
+            using errcode = 'P2V06';
+    end if;
+
+    v_notes := concat_ws(E'\n', nullif(v_task.resolution_notes, ''), v_reason);
+
+    if v_sub.institution_id is not null and v_sub.institution_id <> p_institution_id then
+        select i.official_name, i.aicte_permanent_id
+          into v_prior_name, v_prior_pid
+          from public.institutions i
+         where i.id = v_sub.institution_id;
+
+        v_notes := concat_ws(
+            E'\n', v_notes,
+            format('[correction] previous association %s (%s) replaced by reviewer %s at %s',
+                   coalesce(v_prior_name, 'unknown'),
+                   coalesce(v_prior_pid, 'no permanent id'),
+                   v_actor,
+                   now()));
+    end if;
+
+    update public.institution_verification_tasks
+       set status = 'verified',
+           resolved_institution_id = p_institution_id,
+           resolved_at = now(),
+           reviewed_by_user_id = v_actor,
+           assigned_to_user_id = coalesce(assigned_to_user_id, v_actor),
+           resolution_notes = v_notes
+     where id = v_task.id;
+end;
+$$;
+
+
+ALTER FUNCTION public.decide_institution_verification(p_task_id uuid, p_action text, p_institution_id uuid, p_reason text, p_expected_updated_at timestamp with time zone) OWNER TO postgres;
+
+--
+-- Name: guard_case_creation_open_round(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.guard_case_creation_open_round() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    AS $$
+declare
+    v_intake_status text;
+begin
+    if tg_op = 'UPDATE'
+       and new.source_submission_id is not distinct from old.source_submission_id then
+        return new;
+    end if;
+
+    select s.intake_status
+      into v_intake_status
+      from public.submissions s
+     where s.id = new.source_submission_id
+       for update;
+
+    if not found then
+        -- Let `validate_case_creation()` report the missing submission.
+        return new;
+    end if;
+
+    if v_intake_status = 'awaiting_institution_verification' then
+        raise exception 'A canonical case cannot be created while institution verification is open'
+            using errcode = 'P2V10';
+    end if;
+
+    if exists (
+        select 1
+          from public.institution_verification_tasks t
+         where t.submission_id = new.source_submission_id
+           and t.status in ('pending','in_review')
+    ) then
+        raise exception 'A canonical case cannot be created while a verification round is open'
+            using errcode = 'P2V10';
+    end if;
+
+    return new;
+end;
+$$;
+
+
+ALTER FUNCTION public.guard_case_creation_open_round() OWNER TO postgres;
+
+--
+-- Name: guard_institution_verification_task(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.guard_institution_verification_task() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    AS $$
+declare
+    v_old_requester   uuid;
+    v_new_requester   uuid;
+    v_old_first_line  text;
+    v_sub_institution uuid;
+begin
+    if new.id <> old.id
+       or new.submission_id <> old.submission_id
+       or new.submitted_institution_name <> old.submitted_institution_name
+       or new.created_at <> old.created_at then
+        raise exception 'Identification fields of a verification task are immutable'
+            using errcode = 'P2V04';
+    end if;
+
+    if old.status in ('verified','rejected') then
+        raise exception 'A resolved verification task is immutable' using errcode = 'P2V04';
+    end if;
+
+    -- The correction requester marker is the authoritative record. Both the
+    -- existing and the proposed value are parsed, so a duplicated, misplaced or
+    -- malformed marker fails closed (P2V05) instead of being ignored.
+    v_old_requester := public.correction_request_requester(old.resolution_notes);
+    v_new_requester := public.correction_request_requester(new.resolution_notes);
+
+    if v_old_requester is not null then
+        v_old_first_line := split_part(old.resolution_notes, E'\n', 1);
+        if position(v_old_first_line in coalesce(new.resolution_notes, '')) <> 1 then
+            raise exception 'The correction request record cannot be removed or rewritten'
+                using errcode = 'P2V04';
+        end if;
+        if v_new_requester is distinct from v_old_requester then
+            raise exception 'The correction request record cannot be rewritten'
+                using errcode = 'P2V04';
+        end if;
+    elsif v_new_requester is not null then
+        -- A marker is written when the round is created, never injected later.
+        raise exception 'A correction request record cannot be added after the round started'
+            using errcode = 'P2V05';
+    end if;
+
+    if new.status <> old.status
+       and not ((old.status = 'pending'   and new.status in ('in_review','verified','rejected'))
+             or (old.status = 'in_review' and new.status in ('verified','rejected'))) then
+        raise exception 'Invalid verification status transition: % -> %', old.status, new.status
+            using errcode = 'P2V04';
+    end if;
+
+    if new.status in ('verified','rejected') then
+        if new.reviewed_by_user_id is null or new.resolved_at is null then
+            raise exception 'A resolved task requires a reviewer and a resolution time'
+                using errcode = 'P2V05';
+        end if;
+        if new.resolution_notes is null or btrim(new.resolution_notes) = '' then
+            raise exception 'A resolution reason is required' using errcode = 'P2V07';
+        end if;
+        if not exists (
+            select 1 from public.users u
+             where u.id = new.reviewed_by_user_id and u.account_status = 'active'
+        ) then
+            raise exception 'The reviewer must be an active user' using errcode = 'P2V05';
+        end if;
+    end if;
+
+    if new.status = 'verified' then
+        if new.resolved_institution_id is null then
+            raise exception 'A verified task requires a resolved institution'
+                using errcode = 'P2V05';
+        end if;
+        if not exists (
+            select 1 from public.institutions i
+             where i.id = new.resolved_institution_id
+               and i.verification_status = 'verified'
+               and i.is_active
+        ) then
+            raise exception 'The resolved institution must be verified and active'
+                using errcode = 'P2V09';
+        end if;
+
+        -- Fail closed. Re-examining a submission that already carries an
+        -- institution requires a requester record, otherwise any write path
+        -- could confirm the association with no independent-review trail.
+        select s.institution_id
+          into v_sub_institution
+          from public.submissions s
+         where s.id = new.submission_id;
+
+        if v_sub_institution is not null and v_old_requester is null then
+            raise exception 'A correction round is missing its requester record'
+                using errcode = 'P2V05';
+        end if;
+
+        if v_old_requester is not null and v_old_requester = new.reviewed_by_user_id then
+            raise exception 'The reviewer who requested this correction cannot confirm it'
+                using errcode = 'P2V14';
+        end if;
+    end if;
+
+    if new.status = 'rejected' and new.resolved_institution_id is not null then
+        raise exception 'A rejected task cannot carry a resolved institution'
+            using errcode = 'P2V08';
+    end if;
+
+    if new.assigned_to_user_id is distinct from old.assigned_to_user_id then
+        if new.assigned_to_user_id is not null and not exists (
+            select 1 from public.users u
+             where u.id = new.assigned_to_user_id and u.account_status = 'active'
+        ) then
+            raise exception 'The assignee must be an active user' using errcode = 'P2V05';
+        end if;
+    end if;
+
+    return new;
+end;
+$$;
+
+
+ALTER FUNCTION public.guard_institution_verification_task() OWNER TO postgres;
+
+--
+-- Name: guard_submission_immutability(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.guard_submission_immutability() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO ''
+    AS $$
+declare
+    c_workflow_columns constant text[] := array[
+        'institution_id',
+        'intake_status',
+        'canonical_case_id',
+        'category_id',
+        'normalized_text',
+        'normalization_version',
+        'updated_at'
+    ];
+begin
+    if (to_jsonb(new) - c_workflow_columns) is distinct from (to_jsonb(old) - c_workflow_columns) then
+        raise exception 'Submission origin and provenance fields are immutable'
+            using errcode = 'P2V13';
+    end if;
+    return new;
+end;
+$$;
+
+
+ALTER FUNCTION public.guard_submission_immutability() OWNER TO postgres;
+
+--
 -- Name: has_global_permission(text); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
@@ -769,6 +1270,298 @@ $$;
 ALTER FUNCTION public.has_permission(p_code text) OWNER TO postgres;
 
 --
+-- Name: institution_match_candidates(uuid); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.institution_match_candidates(p_submission_id uuid) RETURNS TABLE(out_institution_id uuid, out_official_name text, out_permanent_id text, out_region_code text, out_region_name text, out_verification_status text, out_is_active boolean, out_evidence text[], out_matched_alias_id uuid, out_matched_alias_name text, out_evidence_rank integer, out_is_eligible boolean)
+    LANGUAGE plpgsql STABLE SECURITY DEFINER
+    SET search_path TO ''
+    SET statement_timeout TO '15s'
+    AS $$
+declare
+    v_pid  text;
+    v_name text;
+begin
+    if public.has_global_permission('INSTITUTION.VERIFY') is not true then
+        raise exception 'The INSTITUTION.VERIFY capability is required'
+            using errcode = '42501';
+    end if;
+
+    select nullif(upper(btrim(s.source_metadata ->> 'institution_permanent_id_as_submitted')), ''),
+           nullif(lower(btrim(s.institution_name_as_submitted)), '')
+      into v_pid, v_name
+      from public.submissions s
+     where s.id = p_submission_id;
+
+    if not found then
+        raise exception 'Submission not found' using errcode = 'P2V02';
+    end if;
+
+    return query
+    with raw as (
+        select *
+          from public.institution_match_candidates_internal(v_pid, v_name, null) c
+    ),
+    agg as (
+        select r.out_institution_id as institution_id,
+               array_agg(r.out_evidence order by r.out_evidence_rank) as evidence,
+               min(r.out_evidence_rank) as best_rank,
+               (array_agg(r.out_matched_alias_id order by r.out_evidence_rank))[1] as alias_id,
+               (array_agg(r.out_matched_alias_name order by r.out_evidence_rank))[1] as alias_name
+          from raw r
+         group by r.out_institution_id
+    )
+    select a.institution_id,
+           i.official_name,
+           i.aicte_permanent_id,
+           reg.code,
+           reg.name,
+           i.verification_status,
+           i.is_active,
+           a.evidence,
+           a.alias_id,
+           a.alias_name,
+           a.best_rank,
+           (i.verification_status = 'verified' and i.is_active)
+      from agg a
+      join public.institutions i on i.id = a.institution_id
+      left join public.regions reg on reg.id = i.region_id
+     order by a.best_rank, i.official_name
+     limit 10;
+end;
+$$;
+
+
+ALTER FUNCTION public.institution_match_candidates(p_submission_id uuid) OWNER TO postgres;
+
+--
+-- Name: institution_match_candidates_internal(text, text, integer); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.institution_match_candidates_internal(p_permanent_id text, p_normalized_name text, p_limit integer DEFAULT NULL::integer) RETURNS TABLE(out_institution_id uuid, out_evidence text, out_evidence_rank integer, out_matched_alias_id uuid, out_matched_alias_name text)
+    LANGUAGE sql STABLE
+    SET search_path TO ''
+    AS $$
+    with submitted as (
+        select nullif(upper(btrim(p_permanent_id)), '')   as pid,
+               nullif(lower(btrim(p_normalized_name)), '') as name
+    ),
+    evidence as (
+        -- E1: exact AICTE Permanent ID. Outranks every name signal.
+        select i.id as institution_id,
+               'exact_permanent_id'::text as evidence,
+               1 as evidence_rank,
+               null::uuid as alias_id,
+               null::text as alias_name
+          from public.institutions i, submitted s
+         where s.pid is not null
+           and upper(btrim(i.aicte_permanent_id)) = s.pid
+
+        union all
+
+        -- E2: exact official (normalised) name.
+        select i.id, 'exact_official_name', 2, null::uuid, null::text
+          from public.institutions i, submitted s
+         where s.name is not null
+           and i.normalized_name = s.name
+
+        union all
+
+        -- E3: exact alias that a human already verified. Pending aliases never
+        -- contribute evidence.
+        select a.institution_id, 'exact_verified_alias', 3, a.id, a.alias_name
+          from public.institution_aliases a, submitted s
+         where s.name is not null
+           and a.normalized_alias = s.name
+           and a.is_active
+           and a.verification_status = 'verified'
+
+        union all
+
+        -- E4: containment. Weak, never auto-verifying.
+        select i.id, 'name_contains', 4, null::uuid, null::text
+          from public.institutions i, submitted s
+         where s.name is not null
+           and char_length(s.name) >= 3
+           and i.normalized_name is not null
+           and i.normalized_name <> s.name
+           and (position(s.name in i.normalized_name) > 0
+                or position(i.normalized_name in s.name) > 0)
+    )
+    select distinct
+           e.institution_id,
+           e.evidence,
+           e.evidence_rank,
+           e.alias_id,
+           e.alias_name
+      from evidence e
+     order by e.evidence_rank, e.institution_id
+     limit p_limit;
+$$;
+
+
+ALTER FUNCTION public.institution_match_candidates_internal(p_permanent_id text, p_normalized_name text, p_limit integer) OWNER TO postgres;
+
+--
+-- Name: institution_verification_submission_metadata(uuid); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.institution_verification_submission_metadata(p_submission_id uuid) RETURNS TABLE(out_submission_id uuid, out_channel_code text, out_channel_name text, out_channel_is_simulated boolean, out_external_reference text, out_source_event_id text, out_received_at timestamp with time zone, out_submission_updated_at timestamp with time zone, out_intake_status text, out_original_language text, out_institution_name_as_submitted text, out_submitted_permanent_id text, out_institution_id uuid, out_institution_official_name text, out_institution_permanent_id text, out_canonical_case_id uuid)
+    LANGUAGE plpgsql STABLE SECURITY DEFINER
+    SET search_path TO ''
+    SET statement_timeout TO '15s'
+    AS $$
+begin
+    if public.has_global_permission('INSTITUTION.VERIFY') is not true then
+        raise exception 'The INSTITUTION.VERIFY capability is required'
+            using errcode = '42501';
+    end if;
+
+    return query
+    select s.id,
+           c.code,
+           c.name,
+           c.is_simulated,
+           s.external_reference,
+           s.source_event_id,
+           s.received_at,
+           s.updated_at,
+           s.intake_status,
+           s.original_language,
+           s.institution_name_as_submitted,
+           nullif(upper(btrim(s.source_metadata ->> 'institution_permanent_id_as_submitted')), ''),
+           s.institution_id,
+           i.official_name,
+           i.aicte_permanent_id,
+           s.canonical_case_id
+      from public.submissions s
+      join public.intake_channels c on c.id = s.intake_channel_id
+      left join public.institutions i on i.id = s.institution_id
+     where s.id = p_submission_id;
+end;
+$$;
+
+
+ALTER FUNCTION public.institution_verification_submission_metadata(p_submission_id uuid) OWNER TO postgres;
+
+--
+-- Name: institution_verification_task_rows(uuid, text, text, text, text, text, integer, integer); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.institution_verification_task_rows(p_task_id uuid DEFAULT NULL::uuid, p_status text DEFAULT 'open'::text, p_assignment text DEFAULT 'all'::text, p_priority text DEFAULT NULL::text, p_query text DEFAULT NULL::text, p_sort text DEFAULT 'oldest'::text, p_limit integer DEFAULT 25, p_offset integer DEFAULT 0) RETURNS TABLE(out_task_id uuid, out_status text, out_priority text, out_submitted_institution_name text, out_submitted_permanent_id text, out_candidate_institution_id uuid, out_assigned_to_user_id uuid, out_assigned_to_name text, out_reviewed_by_user_id uuid, out_reviewed_by_name text, out_resolved_institution_id uuid, out_resolved_institution_name text, out_resolution_notes text, out_resolved_at timestamp with time zone, out_created_at timestamp with time zone, out_updated_at timestamp with time zone, out_age_days integer, out_submission_id uuid, out_channel_code text, out_channel_name text, out_channel_is_simulated boolean, out_external_reference text, out_source_event_id text, out_received_at timestamp with time zone, out_submission_updated_at timestamp with time zone, out_intake_status text, out_original_language text, out_institution_name_as_submitted text, out_submission_institution_id uuid, out_submission_institution_name text, out_submission_institution_permanent_id text, out_canonical_case_id uuid, out_strongest_evidence text, out_candidate_count integer, out_round_type text, out_requester_user_id uuid)
+    LANGUAGE plpgsql STABLE SECURITY DEFINER
+    SET search_path TO ''
+    SET statement_timeout TO '15s'
+    AS $$
+declare
+    v_actor  uuid;
+    v_q      text;
+    v_limit  integer;
+    v_offset integer;
+begin
+    if public.has_global_permission('INSTITUTION.VERIFY') is not true then
+        raise exception 'The INSTITUTION.VERIFY capability is required'
+            using errcode = '42501';
+    end if;
+
+    v_actor := public.auth_uid();
+    if v_actor is null then
+        raise exception 'An authenticated caller is required' using errcode = '42501';
+    end if;
+
+    if p_status not in ('open','pending','in_review','verified','rejected','all') then
+        raise exception 'Unknown status filter' using errcode = 'P2V12';
+    end if;
+    if p_assignment not in ('all','unassigned','mine') then
+        raise exception 'Unknown assignment filter' using errcode = 'P2V12';
+    end if;
+    if p_priority is not null and p_priority not in ('low','normal','high','critical') then
+        raise exception 'Unknown priority filter' using errcode = 'P2V12';
+    end if;
+    if p_sort not in ('oldest','recent') then
+        raise exception 'Unknown sort order' using errcode = 'P2V12';
+    end if;
+
+    v_limit  := least(greatest(coalesce(p_limit, 25), 1), 100);
+    v_offset := greatest(coalesce(p_offset, 0), 0);
+    v_q      := nullif(lower(btrim(coalesce(p_query, ''))), '');
+
+    return query
+    select t.id,
+           t.status,
+           t.priority,
+           t.submitted_institution_name,
+           m.out_submitted_permanent_id,
+           t.candidate_institution_id,
+           t.assigned_to_user_id,
+           au.full_name,
+           t.reviewed_by_user_id,
+           ru.full_name,
+           t.resolved_institution_id,
+           ri.official_name,
+           t.resolution_notes,
+           t.resolved_at,
+           t.created_at,
+           t.updated_at,
+           greatest(0, floor(extract(epoch from (now() - t.created_at)) / 86400))::integer,
+           m.out_submission_id,
+           m.out_channel_code,
+           m.out_channel_name,
+           m.out_channel_is_simulated,
+           m.out_external_reference,
+           m.out_source_event_id,
+           m.out_received_at,
+           m.out_submission_updated_at,
+           m.out_intake_status,
+           m.out_original_language,
+           m.out_institution_name_as_submitted,
+           m.out_institution_id,
+           m.out_institution_official_name,
+           m.out_institution_permanent_id,
+           m.out_canonical_case_id,
+           ev.strongest_evidence,
+           coalesce(ev.candidate_count, 0)::integer,
+           case when m.out_institution_id is not null then 'correction' else 'new_round' end,
+           public.correction_request_requester(t.resolution_notes)
+      from public.institution_verification_tasks t
+      left join lateral public.institution_verification_submission_metadata(t.submission_id) m on true
+      left join lateral (
+          select (array_agg(c.out_evidence order by c.out_evidence_rank))[1] as strongest_evidence,
+                 count(distinct c.out_institution_id) as candidate_count
+            from public.institution_match_candidates_internal(
+                     m.out_submitted_permanent_id,
+                     lower(btrim(coalesce(m.out_institution_name_as_submitted, ''))),
+                     null) c
+      ) ev on true
+      left join public.users au on au.id = t.assigned_to_user_id
+      left join public.users ru on ru.id = t.reviewed_by_user_id
+      left join public.institutions ri on ri.id = t.resolved_institution_id
+     where (p_task_id is null or t.id = p_task_id)
+       and (p_task_id is not null
+            or p_status = 'all'
+            or (p_status = 'open' and t.status in ('pending','in_review'))
+            or t.status = p_status)
+       and (p_task_id is not null
+            or p_assignment = 'all'
+            or (p_assignment = 'unassigned' and t.assigned_to_user_id is null)
+            or (p_assignment = 'mine' and t.assigned_to_user_id = v_actor))
+       and (p_task_id is not null or p_priority is null or t.priority = p_priority)
+       and (p_task_id is not null
+            or v_q is null
+            or position(v_q in lower(t.submitted_institution_name)) > 0
+            or position(v_q in lower(coalesce(m.out_external_reference, ''))) > 0
+            or position(v_q in lower(coalesce(m.out_submitted_permanent_id, ''))) > 0)
+     order by case when p_sort = 'oldest' then t.created_at end asc,
+              case when p_sort = 'recent' then t.updated_at end desc,
+              t.id
+     limit (v_limit + 1) offset v_offset;
+end;
+$$;
+
+
+ALTER FUNCTION public.institution_verification_task_rows(p_task_id uuid, p_status text, p_assignment text, p_priority text, p_query text, p_sort text, p_limit integer, p_offset integer) OWNER TO postgres;
+
+--
 -- Name: is_active_user(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
@@ -853,21 +1646,181 @@ CREATE FUNCTION public.prevent_case_action_history_mutation() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
-
 BEGIN
-
     RAISE EXCEPTION
-
         'Case action history is append-only: % not permitted',
-
         TG_OP;
-
 END;
-
 $$;
 
 
 ALTER FUNCTION public.prevent_case_action_history_mutation() OWNER TO postgres;
+
+--
+-- Name: queue_institution_verification(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.queue_institution_verification() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    AS $$
+declare
+    v_pid        text;
+    v_name       text;
+    v_task_name  text;
+    v_priority   text;
+    v_candidates uuid[];
+begin
+    v_pid  := nullif(upper(btrim(new.source_metadata ->> 'institution_permanent_id_as_submitted')), '');
+    v_name := nullif(lower(btrim(new.institution_name_as_submitted)), '');
+
+    v_task_name := coalesce(
+        nullif(btrim(new.institution_name_as_submitted), ''),
+        v_pid,
+        'Unnamed institution');
+
+    v_priority := case when v_pid is not null then 'high' else 'normal' end;
+
+    select array_agg(distinct c.out_institution_id)
+      into v_candidates
+      from public.institution_match_candidates_internal(v_pid, v_name, null) c;
+
+    insert into public.institution_verification_tasks (
+        submission_id, candidate_institution_id, submitted_institution_name,
+        status, priority
+    ) values (
+        new.id,
+        case when coalesce(array_length(v_candidates, 1), 0) = 1 then v_candidates[1] else null end,
+        left(v_task_name, 300),
+        'pending',
+        v_priority
+    );
+
+    return null;
+end;
+$$;
+
+
+ALTER FUNCTION public.queue_institution_verification() OWNER TO postgres;
+
+--
+-- Name: request_institution_verification_round(uuid, text, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.request_institution_verification_round(p_submission_id uuid, p_reason text, p_expected_submission_updated_at timestamp with time zone DEFAULT NULL::timestamp with time zone) RETURNS uuid
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    SET statement_timeout TO '15s'
+    SET lock_timeout TO '5s'
+    AS $$
+declare
+    v_actor    uuid;
+    v_reason   text;
+    v_sub      public.submissions%rowtype;
+    v_name     text;
+    v_priority text;
+    v_status   text;
+    v_notes    text;
+    v_task_id  uuid;
+begin
+    if public.has_global_permission('INSTITUTION.VERIFY') is not true then
+        raise exception 'The INSTITUTION.VERIFY capability is required'
+            using errcode = '42501';
+    end if;
+
+    v_actor := public.auth_uid();
+    if v_actor is null then
+        raise exception 'An authenticated caller is required' using errcode = '42501';
+    end if;
+    if not exists (
+        select 1 from public.users u
+         where u.id = v_actor and u.account_status = 'active'
+    ) then
+        raise exception 'The caller account is not active' using errcode = '42501';
+    end if;
+
+    v_reason := nullif(btrim(coalesce(p_reason, '')), '');
+    if v_reason is null then
+        raise exception 'A reason is required' using errcode = 'P2V07';
+    end if;
+
+    -- Lock order step 1.
+    select * into v_sub
+      from public.submissions
+     where id = p_submission_id
+       for update;
+
+    if not found then
+        raise exception 'Submission not found' using errcode = 'P2V02';
+    end if;
+    if v_sub.canonical_case_id is not null then
+        raise exception 'The submission is already associated with a canonical case'
+            using errcode = 'P2V06';
+    end if;
+    if p_expected_submission_updated_at is not null
+       and v_sub.updated_at <> p_expected_submission_updated_at then
+        raise exception 'The submission was modified by another reviewer'
+            using errcode = 'P2V01';
+    end if;
+
+    -- Holding the submission row lock serialises every round creator, so this
+    -- check cannot race. The partial unique index remains the final backstop.
+    if exists (
+        select 1
+          from public.institution_verification_tasks t
+         where t.submission_id = p_submission_id
+           and t.status in ('pending','in_review')
+    ) then
+        raise exception 'An active verification round already exists' using errcode = 'P2V11';
+    end if;
+
+    if v_sub.institution_id is not null then
+        -- Correction round: the submission already carries an association that a
+        -- human must re-examine.
+        select i.official_name
+          into v_name
+          from public.institutions i
+         where i.id = v_sub.institution_id;
+
+        v_priority := 'high';
+        v_status   := 'in_review';
+        v_notes    := format('[correction-request] requester=%s at=%s',
+                             v_actor,
+                             to_char(now() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+                      || E'\n' || v_reason;
+    else
+        v_name := coalesce(
+            nullif(btrim(v_sub.institution_name_as_submitted), ''),
+            nullif(upper(btrim(v_sub.source_metadata ->> 'institution_permanent_id_as_submitted')), ''),
+            'Unnamed institution');
+        v_priority := case
+                          when nullif(v_sub.source_metadata ->> 'institution_permanent_id_as_submitted', '') is not null
+                          then 'high' else 'normal'
+                      end;
+        v_status   := 'pending';
+        v_notes    := format('New review round requested by %s at %s: %s',
+                             v_actor, now(), v_reason);
+    end if;
+
+    insert into public.institution_verification_tasks (
+        submission_id, candidate_institution_id, submitted_institution_name,
+        status, priority, assigned_to_user_id, resolution_notes
+    ) values (
+        p_submission_id, null, left(coalesce(v_name, 'Unnamed institution'), 300),
+        v_status, v_priority, v_actor, v_notes
+    )
+    returning id into v_task_id;
+
+    update public.submissions
+       set intake_status = 'awaiting_institution_verification'
+     where id = p_submission_id;
+
+    return v_task_id;
+end;
+$$;
+
+
+ALTER FUNCTION public.request_institution_verification_round(p_submission_id uuid, p_reason text, p_expected_submission_updated_at timestamp with time zone) OWNER TO postgres;
 
 --
 -- Name: set_updated_at(); Type: FUNCTION; Schema: public; Owner: postgres
@@ -876,15 +1829,10 @@ ALTER FUNCTION public.prevent_case_action_history_mutation() OWNER TO postgres;
 CREATE FUNCTION public.set_updated_at() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
-
 BEGIN
-
     NEW.updated_at = now();
-
     RETURN NEW;
-
 END;
-
 $$;
 
 
@@ -923,111 +1871,58 @@ CREATE FUNCTION public.validate_case_access_grant() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
-
 DECLARE
-
     request_record RECORD;
-
 BEGIN
-
     IF NEW.access_request_id IS NOT NULL THEN
 
-
-
         SELECT
-
             case_id,
-
             requester_user_id,
-
             requested_access_level,
-
             request_status,
-
             reviewed_by_user_id
-
         INTO request_record
-
         FROM public.case_access_requests
-
         WHERE id = NEW.access_request_id
-
         FOR SHARE;
 
-
-
         IF NOT FOUND THEN
-
             RAISE EXCEPTION
-
                 'Referenced access request does not exist';
-
         END IF;
-
-
 
         IF request_record.request_status <> 'approved' THEN
-
             RAISE EXCEPTION
-
                 'Access grants require an approved request';
-
         END IF;
-
-
 
         IF request_record.case_id <> NEW.case_id THEN
-
             RAISE EXCEPTION
-
                 'Grant case must match access request case';
-
         END IF;
-
-
 
         IF request_record.requester_user_id <> NEW.grantee_user_id THEN
-
             RAISE EXCEPTION
-
                 'Grant user must match access requester';
-
         END IF;
-
-
 
         IF request_record.requested_access_level = 'details'
-
            AND NEW.access_level = 'collaborate' THEN
-
             RAISE EXCEPTION
-
                 'Grant cannot exceed requested access level';
-
         END IF;
-
-
 
         IF request_record.reviewed_by_user_id
-
            IS DISTINCT FROM NEW.granted_by_user_id THEN
-
             RAISE EXCEPTION
-
                 'Granting user must match the request approver';
-
         END IF;
-
-
 
     END IF;
 
-
-
     RETURN NEW;
-
 END;
-
 $$;
 
 
@@ -1041,113 +1936,59 @@ CREATE FUNCTION public.validate_case_creation() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
-
 DECLARE
-
     institution_is_eligible BOOLEAN;
-
     source_institution_id UUID;
-
     source_status TEXT;
-
     source_case_id UUID;
-
 BEGIN
-
     SELECT (
-
         verification_status = 'verified'
-
         AND is_active = TRUE
-
     )
-
     INTO institution_is_eligible
-
     FROM public.institutions
-
     WHERE id = NEW.institution_id
-
     FOR SHARE;
 
-
-
     IF institution_is_eligible IS DISTINCT FROM TRUE THEN
-
         RAISE EXCEPTION
-
             'Case requires an active, verified institution';
-
     END IF;
-
-
 
     SELECT
-
         institution_id,
-
         intake_status,
-
         canonical_case_id
-
     INTO
-
         source_institution_id,
-
         source_status,
-
         source_case_id
-
     FROM public.submissions
-
     WHERE id = NEW.source_submission_id
-
     FOR UPDATE;
 
-
-
     IF NOT FOUND THEN
-
         RAISE EXCEPTION 'Source submission not found';
-
     END IF;
-
-
 
     IF source_institution_id IS DISTINCT FROM NEW.institution_id THEN
-
         RAISE EXCEPTION
-
             'Case institution must match source submission institution';
-
     END IF;
-
-
 
     IF source_status <> 'ready_for_case_creation' THEN
-
         RAISE EXCEPTION
-
             'Source submission must be ready for case creation';
-
     END IF;
-
-
 
     IF source_case_id IS NOT NULL THEN
-
         RAISE EXCEPTION
-
             'Source submission is already associated with a case';
-
     END IF;
 
-
-
     RETURN NEW;
-
 END;
-
 $$;
 
 
@@ -1161,113 +2002,59 @@ CREATE FUNCTION public.validate_case_deadline() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
-
 DECLARE
-
     assignment_case_id UUID;
-
     policy_record RECORD;
-
 BEGIN
-
     SELECT
-
         policy_status,
-
         effective_from,
-
         effective_until,
-
         response_minutes,
-
         resolution_minutes
-
     INTO policy_record
-
     FROM public.sla_policies
-
     WHERE id = NEW.sla_policy_id
-
     FOR SHARE;
 
-
-
     IF NOT FOUND
-
        OR policy_record.policy_status <> 'approved'
-
        OR policy_record.effective_from > NEW.clock_started_at
-
        OR (
-
            policy_record.effective_until IS NOT NULL
-
            AND policy_record.effective_until <= NEW.clock_started_at
-
        ) THEN
-
         RAISE EXCEPTION
-
             'Deadline requires an approved SLA policy effective at clock start';
-
     END IF;
-
-
 
     IF NEW.deadline_type = 'first_response'
-
        AND policy_record.response_minutes IS NULL THEN
-
         RAISE EXCEPTION
-
             'SLA policy does not define a first-response duration';
-
     END IF;
-
-
 
     IF NEW.deadline_type = 'resolution'
-
        AND policy_record.resolution_minutes IS NULL THEN
-
         RAISE EXCEPTION
-
             'SLA policy does not define a resolution duration';
-
     END IF;
-
-
 
     IF NEW.case_bureau_assignment_id IS NOT NULL THEN
-
         SELECT case_id
-
         INTO assignment_case_id
-
         FROM public.case_bureau_assignments
-
         WHERE id = NEW.case_bureau_assignment_id
-
         FOR SHARE;
 
-
-
         IF assignment_case_id IS DISTINCT FROM NEW.case_id THEN
-
             RAISE EXCEPTION
-
                 'Deadline bureau assignment belongs to another case';
-
         END IF;
-
     END IF;
 
-
-
     RETURN NEW;
-
 END;
-
 $$;
 
 
@@ -1281,99 +2068,52 @@ CREATE FUNCTION public.validate_case_escalation() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
-
 DECLARE
-
     deadline_case_id UUID;
-
     linked_policy_id UUID;
-
     rule_policy_id UUID;
-
     rule_enabled BOOLEAN;
-
 BEGIN
-
     IF NEW.case_deadline_id IS NOT NULL THEN
-
         SELECT case_id, sla_policy_id
-
         INTO deadline_case_id, linked_policy_id
-
         FROM public.case_deadlines
-
         WHERE id = NEW.case_deadline_id
-
         FOR SHARE;
-
-
 
         IF deadline_case_id IS DISTINCT FROM NEW.case_id THEN
-
             RAISE EXCEPTION
-
                 'Escalation deadline belongs to another case';
-
         END IF;
-
     END IF;
-
-
 
     IF NEW.escalation_rule_id IS NOT NULL THEN
-
         SELECT sla_policy_id, is_active
-
         INTO rule_policy_id, rule_enabled
-
         FROM public.escalation_rules
-
         WHERE id = NEW.escalation_rule_id
-
         FOR SHARE;
 
-
-
         IF NEW.escalation_type = 'automatic'
-
            AND rule_enabled IS DISTINCT FROM TRUE THEN
-
             RAISE EXCEPTION
-
                 'Automatic escalation requires an active rule';
-
         END IF;
-
-
 
         IF rule_policy_id IS NOT NULL THEN
-
             IF NEW.case_deadline_id IS NULL
-
                OR linked_policy_id IS DISTINCT FROM rule_policy_id THEN
-
                 RAISE EXCEPTION
-
                     'Escalation rule SLA policy must match the deadline';
-
             END IF;
-
         END IF;
-
     ELSIF NEW.escalation_type = 'automatic' THEN
-
         RAISE EXCEPTION
-
             'Automatic escalation requires an escalation rule';
-
     END IF;
 
-
-
     RETURN NEW;
-
 END;
-
 $$;
 
 
@@ -1387,79 +2127,42 @@ CREATE FUNCTION public.validate_case_transfer() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
-
 DECLARE
-
     source_case_id UUID;
-
     destination_case_id UUID;
-
 BEGIN
-
     IF NEW.from_bureau_assignment_id IS NOT NULL THEN
 
-
-
         SELECT case_id
-
         INTO source_case_id
-
         FROM public.case_bureau_assignments
-
         WHERE id = NEW.from_bureau_assignment_id
-
         FOR SHARE;
 
-
-
         IF source_case_id IS DISTINCT FROM NEW.case_id THEN
-
             RAISE EXCEPTION
-
                 'Source bureau assignment belongs to another case';
-
         END IF;
 
-
-
     END IF;
-
-
 
     IF NEW.to_bureau_assignment_id IS NOT NULL THEN
 
-
-
         SELECT case_id
-
         INTO destination_case_id
-
         FROM public.case_bureau_assignments
-
         WHERE id = NEW.to_bureau_assignment_id
-
         FOR SHARE;
 
-
-
         IF destination_case_id IS DISTINCT FROM NEW.case_id THEN
-
             RAISE EXCEPTION
-
                 'Destination bureau assignment belongs to another case';
-
         END IF;
-
-
 
     END IF;
 
-
-
     RETURN NEW;
-
 END;
-
 $$;
 
 
@@ -3791,6 +4494,13 @@ CREATE INDEX users_super_admin_idx ON public.users USING btree (id) WHERE ((is_s
 
 
 --
+-- Name: institution_verification_tasks trg_apply_institution_verification_outcome; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_apply_institution_verification_outcome AFTER UPDATE ON public.institution_verification_tasks FOR EACH ROW EXECUTE FUNCTION public.apply_institution_verification_outcome();
+
+
+--
 -- Name: attachments trg_attachments_updated_at; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
@@ -3917,6 +4627,27 @@ CREATE TRIGGER trg_escalation_rules_updated_at BEFORE UPDATE ON public.escalatio
 
 
 --
+-- Name: cases trg_guard_case_creation_open_round; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_guard_case_creation_open_round BEFORE INSERT OR UPDATE ON public.cases FOR EACH ROW EXECUTE FUNCTION public.guard_case_creation_open_round();
+
+
+--
+-- Name: institution_verification_tasks trg_guard_institution_verification_task; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_guard_institution_verification_task BEFORE UPDATE ON public.institution_verification_tasks FOR EACH ROW EXECUTE FUNCTION public.guard_institution_verification_task();
+
+
+--
+-- Name: submissions trg_guard_submission_immutability; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_guard_submission_immutability BEFORE UPDATE ON public.submissions FOR EACH ROW EXECUTE FUNCTION public.guard_submission_immutability();
+
+
+--
 -- Name: institution_aliases trg_institution_aliases_updated_at; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
@@ -4012,6 +4743,13 @@ CREATE TRIGGER trg_notifications_updated_at BEFORE UPDATE ON public.notification
 --
 
 CREATE TRIGGER trg_permissions_updated_at BEFORE UPDATE ON public.permissions FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: submissions trg_queue_institution_verification; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_queue_institution_verification AFTER INSERT ON public.submissions FOR EACH ROW WHEN (((new.institution_id IS NULL) AND (new.intake_status = 'awaiting_institution_verification'::text))) EXECUTE FUNCTION public.queue_institution_verification();
 
 
 --
@@ -5310,6 +6048,13 @@ GRANT ALL ON FUNCTION public.active_bureau_id() TO service_role;
 
 
 --
+-- Name: FUNCTION apply_institution_verification_outcome(); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.apply_institution_verification_outcome() FROM PUBLIC;
+
+
+--
 -- Name: FUNCTION assert_global_administrator_remains(); Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -5329,11 +6074,47 @@ GRANT ALL ON FUNCTION public.auth_uid() TO service_role;
 
 
 --
+-- Name: FUNCTION correction_request_requester(p_notes text); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.correction_request_requester(p_notes text) FROM PUBLIC;
+
+
+--
 -- Name: FUNCTION create_demo_submission(p_channel_code text, p_institution_permanent_id text, p_institution_name_as_submitted text, p_subject text, p_original_text text, p_original_language text, p_category_code text, p_source_event_id text, p_idempotency_key text, p_source_submitted_at timestamp with time zone, p_consent_acknowledged boolean); Type: ACL; Schema: public; Owner: postgres
 --
 
 REVOKE ALL ON FUNCTION public.create_demo_submission(p_channel_code text, p_institution_permanent_id text, p_institution_name_as_submitted text, p_subject text, p_original_text text, p_original_language text, p_category_code text, p_source_event_id text, p_idempotency_key text, p_source_submitted_at timestamp with time zone, p_consent_acknowledged boolean) FROM PUBLIC;
 GRANT ALL ON FUNCTION public.create_demo_submission(p_channel_code text, p_institution_permanent_id text, p_institution_name_as_submitted text, p_subject text, p_original_text text, p_original_language text, p_category_code text, p_source_event_id text, p_idempotency_key text, p_source_submitted_at timestamp with time zone, p_consent_acknowledged boolean) TO one_desk_intake;
+
+
+--
+-- Name: FUNCTION decide_institution_verification(p_task_id uuid, p_action text, p_institution_id uuid, p_reason text, p_expected_updated_at timestamp with time zone); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.decide_institution_verification(p_task_id uuid, p_action text, p_institution_id uuid, p_reason text, p_expected_updated_at timestamp with time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.decide_institution_verification(p_task_id uuid, p_action text, p_institution_id uuid, p_reason text, p_expected_updated_at timestamp with time zone) TO authenticated;
+
+
+--
+-- Name: FUNCTION guard_case_creation_open_round(); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.guard_case_creation_open_round() FROM PUBLIC;
+
+
+--
+-- Name: FUNCTION guard_institution_verification_task(); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.guard_institution_verification_task() FROM PUBLIC;
+
+
+--
+-- Name: FUNCTION guard_submission_immutability(); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.guard_submission_immutability() FROM PUBLIC;
 
 
 --
@@ -5352,6 +6133,37 @@ GRANT ALL ON FUNCTION public.has_global_permission(p_code text) TO service_role;
 REVOKE ALL ON FUNCTION public.has_permission(p_code text) FROM PUBLIC;
 GRANT ALL ON FUNCTION public.has_permission(p_code text) TO authenticated;
 GRANT ALL ON FUNCTION public.has_permission(p_code text) TO service_role;
+
+
+--
+-- Name: FUNCTION institution_match_candidates(p_submission_id uuid); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.institution_match_candidates(p_submission_id uuid) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.institution_match_candidates(p_submission_id uuid) TO authenticated;
+
+
+--
+-- Name: FUNCTION institution_match_candidates_internal(p_permanent_id text, p_normalized_name text, p_limit integer); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.institution_match_candidates_internal(p_permanent_id text, p_normalized_name text, p_limit integer) FROM PUBLIC;
+
+
+--
+-- Name: FUNCTION institution_verification_submission_metadata(p_submission_id uuid); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.institution_verification_submission_metadata(p_submission_id uuid) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.institution_verification_submission_metadata(p_submission_id uuid) TO authenticated;
+
+
+--
+-- Name: FUNCTION institution_verification_task_rows(p_task_id uuid, p_status text, p_assignment text, p_priority text, p_query text, p_sort text, p_limit integer, p_offset integer); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.institution_verification_task_rows(p_task_id uuid, p_status text, p_assignment text, p_priority text, p_query text, p_sort text, p_limit integer, p_offset integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.institution_verification_task_rows(p_task_id uuid, p_status text, p_assignment text, p_priority text, p_query text, p_sort text, p_limit integer, p_offset integer) TO authenticated;
 
 
 --
@@ -5397,6 +6209,21 @@ GRANT ALL ON FUNCTION public.jwt_uuid_claim(p_claim text) TO service_role;
 GRANT ALL ON FUNCTION public.prevent_case_action_history_mutation() TO anon;
 GRANT ALL ON FUNCTION public.prevent_case_action_history_mutation() TO authenticated;
 GRANT ALL ON FUNCTION public.prevent_case_action_history_mutation() TO service_role;
+
+
+--
+-- Name: FUNCTION queue_institution_verification(); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.queue_institution_verification() FROM PUBLIC;
+
+
+--
+-- Name: FUNCTION request_institution_verification_round(p_submission_id uuid, p_reason text, p_expected_submission_updated_at timestamp with time zone); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.request_institution_verification_round(p_submission_id uuid, p_reason text, p_expected_submission_updated_at timestamp with time zone) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.request_institution_verification_round(p_submission_id uuid, p_reason text, p_expected_submission_updated_at timestamp with time zone) TO authenticated;
 
 
 --
@@ -5554,7 +6381,7 @@ GRANT ALL ON TABLE public.case_officer_assignments TO service_role;
 -- Name: TABLE case_relationships; Type: ACL; Schema: public; Owner: postgres
 --
 
-GRANT SELECT,INSERT,DELETE,MAINTAIN,UPDATE ON TABLE public.case_relationships TO authenticated;
+GRANT SELECT ON TABLE public.case_relationships TO authenticated;
 GRANT ALL ON TABLE public.case_relationships TO service_role;
 
 
@@ -5576,7 +6403,7 @@ GRANT ALL ON TABLE public.case_transfers TO service_role;
 -- Name: TABLE cases; Type: ACL; Schema: public; Owner: postgres
 --
 
-GRANT SELECT,INSERT,DELETE,MAINTAIN,UPDATE ON TABLE public.cases TO authenticated;
+GRANT SELECT ON TABLE public.cases TO authenticated;
 GRANT ALL ON TABLE public.cases TO service_role;
 
 
@@ -5584,7 +6411,7 @@ GRANT ALL ON TABLE public.cases TO service_role;
 -- Name: TABLE complaint_categories; Type: ACL; Schema: public; Owner: postgres
 --
 
-GRANT SELECT,INSERT,DELETE,MAINTAIN,UPDATE ON TABLE public.complaint_categories TO authenticated;
+GRANT SELECT ON TABLE public.complaint_categories TO authenticated;
 GRANT ALL ON TABLE public.complaint_categories TO service_role;
 
 
@@ -5592,7 +6419,7 @@ GRANT ALL ON TABLE public.complaint_categories TO service_role;
 -- Name: TABLE duplicate_candidates; Type: ACL; Schema: public; Owner: postgres
 --
 
-GRANT SELECT,INSERT,DELETE,MAINTAIN,UPDATE ON TABLE public.duplicate_candidates TO authenticated;
+GRANT SELECT ON TABLE public.duplicate_candidates TO authenticated;
 GRANT ALL ON TABLE public.duplicate_candidates TO service_role;
 
 
@@ -5615,7 +6442,6 @@ GRANT SELECT,INSERT,UPDATE ON TABLE public.institution_aliases TO authenticated;
 -- Name: TABLE institution_verification_tasks; Type: ACL; Schema: public; Owner: postgres
 --
 
-GRANT SELECT,INSERT,DELETE,MAINTAIN,UPDATE ON TABLE public.institution_verification_tasks TO authenticated;
 GRANT ALL ON TABLE public.institution_verification_tasks TO service_role;
 
 
@@ -5776,5 +6602,5 @@ ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON T
 -- PostgreSQL database dump complete
 --
 
-\unrestrict u7EBgjloR529Sd1AKqGspQLmzEoII5ExLbxeXJHuVMaEmbHG7CeuFcEH3z3FFQj
+\unrestrict 5EbwqoC8hPNvmHw15TGTzlVYDtOupNUqJewfL4NLzfshxR6ykPUMkdJDeLtyL4S
 

@@ -27,6 +27,11 @@ from app.core.security import TokenVerifier
 from app.db.session import Database, DatabaseNotConfigured
 from app.services.intake import DemoIntakeService
 
+import sys
+if sys.platform == "win32":
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -67,9 +72,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title=settings.app_name,
         version="0.1.0",
         description=(
-            "AICTE OneDesk - Phase 2.1 simulates complaint intake from the AICTE and "
-            "CPGRAMS portals. Nothing entered here is sent to AICTE, CPGRAMS or any "
-            "government office, and the demo portals are not real complaint channels."
+            "AICTE OneDesk - Phase 2.2 adds the human institution-verification "
+            "queue on top of the Phase 2.1 simulated intake. Nothing entered here "
+            "is sent to AICTE, CPGRAMS or any government office, and the demo "
+            "portals are not real complaint channels."
         ),
         docs_url="/docs" if settings.app_env != "production" else None,
         redoc_url=None,

@@ -302,10 +302,13 @@ def test_me_reports_global_permissions_for_a_global_role(client) -> None:
     body = response.json()
     assert body["is_super_admin"] is True
     assert body["active_bureau_id"] is None
-    assert set(body["permissions"]) == set(perms.PHASE1_PERMISSIONS) | set(
-        perms.PHASE2_ROLE_GRANTS[perms.SUPER_ADMIN]
+    assert set(body["permissions"]) == (
+        set(perms.PHASE1_PERMISSIONS)
+        | set(perms.PHASE2_ROLE_GRANTS[perms.SUPER_ADMIN])
+        | set(perms.PHASE2_VERIFICATION_ROLE_GRANTS[perms.SUPER_ADMIN])
     )
     assert perms.SUBMISSION_VIEW in body["permissions"]
+    assert perms.INSTITUTION_VERIFY in body["permissions"]
     assert "case.content.view" not in body["permissions"]
     assert body["demo_mode"] is True
     assert body["demo_notice"]

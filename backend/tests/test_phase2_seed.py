@@ -15,6 +15,10 @@ from app.services.intake import DEMO_CHANNELS, SIMULATION_NOTICE_VERSION
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_PATH = ROOT / "supabase" / "migrations" / "0003_phase2_intake.sql"
 SEED_PATH = ROOT / "supabase" / "seed" / "phase2_intake_seed.sql"
+VERIFICATION_MIGRATION_PATH = (
+    ROOT / "supabase" / "migrations" / "0004_phase2_institution_verification.sql"
+)
+VERIFICATION_SEED_PATH = ROOT / "supabase" / "seed" / "phase2_verification_seed.sql"
 
 
 def _sql(path: Path) -> str:
@@ -125,3 +129,53 @@ def test_migration_creates_no_table_or_column() -> None:
 def test_simulation_notice_version_is_consistent() -> None:
     assert SIMULATION_NOTICE_VERSION == "SIM-NOTICE-2026-10-29-v1"
     assert SIMULATION_NOTICE_VERSION in _sql(MIGRATION_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.2 - institution verification
+# ---------------------------------------------------------------------------
+def test_phase22_seed_declares_the_verification_catalogue_only() -> None:
+    block = _block(
+        _sql(VERIFICATION_SEED_PATH),
+        "insert into public.permissions",
+        "on conflict (code) do update",
+    )
+    codes = {code.lower() for code in re.findall(r"'([A-Z0-9.]+)'", block)}
+    assert codes == set(perms.PHASE2_VERIFICATION_PERMISSIONS)
+
+
+def test_phase22_seed_roles_match_the_python_grants() -> None:
+    sql = _sql(VERIFICATION_SEED_PATH)
+    for role_code, permission_codes in perms.PHASE2_VERIFICATION_ROLE_GRANTS.items():
+        assert f"'{role_code}'" in sql
+        for permission_code in permission_codes:
+            assert f"'{permission_code.upper()}'" in sql
+
+
+def test_phase22_seed_never_creates_a_case() -> None:
+    seed = _sql(VERIFICATION_SEED_PATH)
+    assert "insert into public.cases" not in seed
+    assert "canonical_case_id" in seed  # asserted to stay null
+
+
+def test_phase22_migration_adds_no_table_or_column() -> None:
+    sql = _sql(VERIFICATION_MIGRATION_PATH).lower()
+    assert "create table" not in sql
+    assert "add column" not in sql
+    assert "drop table" not in sql
+    assert "alter table" not in sql
+
+
+def test_phase22_migration_pins_definer_functions() -> None:
+    sql = _sql(VERIFICATION_MIGRATION_PATH)
+    assert "security definer" in sql.lower()
+    assert "set search_path = ''" in sql
+    assert "owner to postgres" in sql
+
+
+def test_phase22_migration_keeps_the_task_table_unreadable_by_authenticated() -> None:
+    sql = _sql(VERIFICATION_MIGRATION_PATH)
+    assert (
+        "revoke all on table public.institution_verification_tasks from authenticated;"
+        in sql
+    )

@@ -283,3 +283,93 @@ export interface DemoSubmissionReceipt {
   demo_notice: string;
   simulation_notice_version: string;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2.2 — human institution verification
+// ---------------------------------------------------------------------------
+export type VerificationTaskStatus = "pending" | "in_review" | "verified" | "rejected";
+export type VerificationPriority = "low" | "normal" | "high" | "critical";
+export type VerificationRoundType = "new_round" | "correction";
+export type VerificationAction =
+  | "confirm"
+  | "reject"
+  | "request_information"
+  | "assign_to_me"
+  | "unassign";
+
+export interface VerificationSubmissionRef {
+  id: string;
+  channel_code: string;
+  channel_name: string;
+  channel_is_simulated: boolean;
+  external_reference: string | null;
+  source_event_id: string | null;
+  received_at: string;
+  updated_at: string;
+  intake_status: string;
+  original_language: string;
+  institution_name_as_submitted: string | null;
+  submitted_permanent_id: string | null;
+  institution_id: string | null;
+  institution_official_name: string | null;
+  institution_permanent_id: string | null;
+  canonical_case_id: string | null;
+}
+
+export interface VerificationTask {
+  id: string;
+  status: VerificationTaskStatus;
+  priority: VerificationPriority;
+  submitted_institution_name: string;
+  submitted_permanent_id: string | null;
+  candidate_institution_id: string | null;
+  candidate_count: number;
+  strongest_evidence: string | null;
+  assigned_to_user_id: string | null;
+  assigned_to_name: string | null;
+  reviewed_by_user_id: string | null;
+  reviewed_by_name: string | null;
+  resolved_institution_id: string | null;
+  resolved_institution_name: string | null;
+  resolution_notes: string | null;
+  resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+  age_days: number;
+  round_type: VerificationRoundType;
+  requester_user_id: string | null;
+  submission: VerificationSubmissionRef;
+}
+
+export interface VerificationCandidate {
+  institution_id: string;
+  official_name: string;
+  permanent_id: string | null;
+  region_code: string | null;
+  region_name: string | null;
+  verification_status: string;
+  is_active: boolean;
+  evidence: string[];
+  matched_alias_id: string | null;
+  matched_alias_name: string | null;
+  evidence_rank: number;
+  is_eligible: boolean;
+}
+
+export interface VerificationCandidateList {
+  data: VerificationCandidate[];
+  request_id: string;
+}
+
+export interface VerificationDecisionPayload {
+  action: VerificationAction;
+  institution_id?: string | null;
+  reason?: string | null;
+  expected_updated_at?: string | null;
+}
+
+export interface CorrectionRoundPayload {
+  reason: string;
+  expected_submission_updated_at?: string | null;
+}
+

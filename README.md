@@ -1,6 +1,6 @@
 # AICTE OneDesk
 
-AICTE institution complaint monitoring and status dashboard — **Phase 2.1: simulated complaint intake and submission preservation** (on top of Phase 1 identity, authorization and reference data).
+AICTE institution complaint monitoring and status dashboard — **Phase 2.2: institution identification and human verification** (on top of Phase 2.1 simulated intake and Phase 1 identity, authorization and reference data).
 
 > **Demonstrator only.** Every seeded bureau, region, institution and person is illustrative. This is not an official AICTE service, no real complaint is filed or tracked, and no data is sent to AICTE, CPGRAMS or any external system.
 
@@ -10,16 +10,17 @@ AICTE institution complaint monitoring and status dashboard — **Phase 2.1: sim
 | --- | --- |
 | Identity | Supabase Auth is the only identity system; no parallel password store |
 | Profiles | `public.users` linked to the Auth identity, with account status and no hard deletion |
-| Authorization | 14 Phase 1 capabilities plus `submission.view`; 6 persona roles; global and bureau-scoped grants |
+| Authorization | 15 capabilities (`INSTITUTION.VERIFY` added); 6 persona roles; global and bureau-scoped grants |
 | Enforcement | FastAPI dependency checks **and** PostgreSQL row level security |
 | Reference data | Regions, institutions, institution aliases, bureaus and bureau memberships |
 | Administration | User profiles, account status, role grants and revocations |
 | Simulated intake | Public AICTE and CPGRAMS demo portals, preserved submissions, idempotent replay/conflict handling |
 | Intake review | `submission.view` list and detail screens; complaint bodies omitted from lists |
+| Institution verification | Human-in-the-loop review queue, advisory evidence matching (E1–E4), reasoned decision command, independent review for correction rounds, case creation protection |
 | Interface | React + TypeScript + Vite, bureau-context switcher, capability-aware navigation |
-| Tests | `pytest` authorization/RLS/intake suites and `vitest` helper/client tests |
+| Tests | `pytest` live RLS/definer/verification/intake suites and `vitest` frontend tests |
 
-Phase 2.2 and later (institution verification, duplicate review, canonical cases, assignments, notes, SLA, analytics, notifications, attachments) are intentionally **not** implemented.
+Phase 2.3 and later (duplicate review, canonical cases, bureau assignments, notes, SLA, analytics, notifications, attachments) are intentionally **not** implemented.
 
 ## Repository layout
 
@@ -31,12 +32,12 @@ backend/            FastAPI service (Python 3.11+)
   tests/            security, authorization, endpoint, pagination and RLS tests
 frontend/           React + TypeScript + Vite application
   src/auth/         session/profile/bureau-context state machine
-  src/pages/        Phase 1 screens
+  src/pages/        Phase 1 and Phase 2 screens
   src/styles/       hand-written CSS with design tokens
-docs/               PRD, database designs, API notes and this phase's implementation report
+docs/               PRD, database designs, API notes and implementation reports
 supabase/
-  migrations/       additive RLS, helper-function and grant migration
-  seed/             illustrative permissions, roles, regions, bureaus and institutions
+  migrations/       additive RLS, helper-function, verification queue and grant migration
+  seed/             illustrative permissions, roles, regions, bureaus, institutions and tasks
 scripts/            idempotent demo identity provisioning
 ```
 
@@ -59,9 +60,11 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/seed/phase1_identity_seed.sq
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/0002_phase1_security_closure.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/0003_phase2_intake.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/seed/phase2_intake_seed.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/0004_phase2_institution_verification.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/seed/phase2_verification_seed.sql
 ```
 
-Every file is wrapped in a transaction and is safe to re-run. Review them and obtain approval before applying to any shared environment. Never run destructive SQL automatically. Do **not** use `supabase db reset` against a linked remote project; it is destructive. See [`docs/PHASE1_VERIFICATION.md`](docs/PHASE1_VERIFICATION.md) and [`docs/PHASE2_INTAKE.md`](docs/PHASE2_INTAKE.md) for the safe apply and verification procedure.
+Every file is wrapped in a transaction and is safe to re-run. Review them and obtain approval before applying to any shared environment. Never run destructive SQL automatically. Do **not** use `supabase db reset` against a linked remote project; it is destructive. See [`docs/PHASE1_VERIFICATION.md`](docs/PHASE1_VERIFICATION.md), [`docs/PHASE2_INTAKE.md`](docs/PHASE2_INTAKE.md), and [`docs/PHASE2_VERIFICATION.md`](docs/PHASE2_VERIFICATION.md) for the safe apply and verification procedure.
 
 Phase 2.1 creates one NOLOGIN role, `one_desk_intake`. Apply the migration as `postgres` so the `grant one_desk_intake to postgres` statement succeeds; the API then uses `SET LOCAL ROLE one_desk_intake` only for the insert-only intake function.
 
