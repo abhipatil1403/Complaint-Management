@@ -1,7 +1,13 @@
 """Live RLS tests against PostgreSQL.
 
-These tests only run when a database is configured (DATABASE_URL or
-TEST_DATABASE_URL). They assume:
+These tests only run when a database is configured. The connection string is
+resolved in this order:
+
+1. ``TEST_DATABASE_URL`` from the shell (a dedicated test project),
+2. ``DATABASE_URL`` from the shell,
+3. ``DATABASE_URL`` from ``backend/.env`` (the same file the API reads).
+
+They assume:
 
 * the Phase 1 migration has been applied, and
 * the connecting role may ``SET LOCAL ROLE authenticated`` / ``anon``
@@ -15,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -23,11 +30,35 @@ import pytest
 from psycopg import errors as pg_errors
 from psycopg.rows import dict_row
 
-DATABASE_URL = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL")
+from app.core.config import Settings
+
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+
+def _resolve_database_url() -> str | None:
+    """Shell variables win; otherwise read ``backend/.env`` like the API does."""
+    for name in ("TEST_DATABASE_URL", "DATABASE_URL"):
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+
+    env_file = _BACKEND_DIR / ".env"
+    try:
+        settings = Settings(_env_file=str(env_file) if env_file.is_file() else None)
+    except Exception:  # noqa: BLE001 - a broken config must not crash collection
+        return None
+    configured = (settings.database_url or "").strip()
+    return configured or None
+
+
+DATABASE_URL = _resolve_database_url()
 
 pytestmark = pytest.mark.skipif(
     not DATABASE_URL,
-    reason="No DATABASE_URL/TEST_DATABASE_URL configured; live RLS checks are skipped.",
+    reason=(
+        "No TEST_DATABASE_URL/DATABASE_URL in the shell and no DATABASE_URL in "
+        "backend/.env; live RLS checks are skipped."
+    ),
 )
 
 
@@ -116,6 +147,9 @@ def accounts():
              order by u.created_at asc, u.id asc
             """
         ).fetchall()
+        total_users = owner.execute(
+            "select count(*) as total from public.users"
+        ).fetchone()["total"]
     ordinary = [
         row
         for row in rows
@@ -131,7 +165,7 @@ def accounts():
         "other": ordinary[1],
         "super": supers[0] if supers else None,
         "ordinary": ordinary,
-        "all": rows,
+        "total_users": total_users,
     }
 
 
@@ -415,10 +449,20 @@ def test_ordinary_user_cannot_write_reference_data(conn, accounts) -> None:
 
 
 def test_ordinary_user_cannot_grant_roles(conn, accounts) -> None:
+    """A self-grant of SUPER_ADMIN is refused.
+
+    The pre-existing ``validate_user_role_assignment`` trigger locks the target
+    role with ``SELECT ... FOR SHARE``, and PostgreSQL evaluates locking reads
+    against the UPDATE policy as well as the SELECT policy. An ordinary caller
+    therefore receives the trigger's denial (SQLSTATE ``P0001``) instead of a
+    bare row-level-security violation (``42501``). Both are refusals; what
+    matters is that no assignment row is created.
+    """
     me = accounts["me"]
     with conn.transaction(force_rollback=True):
         _act_as(conn, me["id"])
-        with pytest.raises(pg_errors.InsufficientPrivilege):
+        conn.execute("savepoint grant_probe")
+        with pytest.raises(psycopg.Error) as excinfo:
             conn.execute(
                 """
                 insert into public.user_role_assignments (user_id, role_id)
@@ -426,6 +470,17 @@ def test_ordinary_user_cannot_grant_roles(conn, accounts) -> None:
                 """,
                 (str(me["id"]),),
             )
+        assert excinfo.value.sqlstate in {"42501", "P0001"}
+        conn.execute("rollback to savepoint grant_probe")
+        escalated = conn.execute(
+            """
+            select count(*) as total
+              from public.user_role_assignments ura
+              join public.roles r on r.id = ura.role_id
+             where r.code = 'SUPER_ADMIN'
+            """
+        ).fetchone()["total"]
+    assert escalated == 0
 
 
 def test_super_admin_can_manage_reference_data(conn, accounts) -> None:
@@ -448,7 +503,7 @@ def test_super_admin_can_read_every_profile(conn, accounts) -> None:
     super_admin = accounts["super"]
     if super_admin is None:
         pytest.skip("No active Super Admin account found.")
-    expected = len(accounts["all"])
+    expected = accounts["total_users"]
     with conn.transaction(force_rollback=True):
         _act_as(conn, super_admin["id"])
         actual = conn.execute("select count(*) as total from public.users").fetchone()["total"]

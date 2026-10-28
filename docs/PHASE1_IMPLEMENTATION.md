@@ -3,7 +3,7 @@
 **Project:** AICTE OneDesk — AICTE institution complaint monitoring and status dashboard  
 **Phase:** 1 — identity, authorization and reference data (PRD §30)  
 **Date:** 28 October 2026  
-**Status:** Implementation complete for the approved Phase 1 scope; live database verification pending credentials  
+**Status:** Implementation complete for the approved Phase 1 scope; migration, seed and demo identities applied to the linked project; live RLS suite **14 passed** (full suite 133 passed). Product sign-off on the permission decisions is still pending — see `docs/PHASE1_VERIFICATION.md` §4.2.  
 **Demonstrator notice:** all seeded names, bureaus, regions and institutions are illustrative. This is not an official AICTE service.
 
 ---

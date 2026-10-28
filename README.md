@@ -177,7 +177,8 @@ cd backend
 python -m pytest -q
 
 # RLS tests against a real Supabase database
-$env:DATABASE_URL = "postgresql://..."; python -m pytest -q tests/test_rls_db.py
+# (reads TEST_DATABASE_URL / DATABASE_URL, or backend/.env)
+python -m pytest -q tests/test_rls_db.py
 
 # Frontend
 cd frontend
@@ -187,7 +188,7 @@ npm run build
 npm audit
 ```
 
-The RLS suite skips when `DATABASE_URL` is absent, so a green local run does not prove database enforcement. Apply the migration and run the RLS suite against a dedicated test project before trusting RLS in a shared environment.
+The RLS suite skips when no connection string is found, so a green local run does not prove database enforcement. The suite reads `TEST_DATABASE_URL`, then `DATABASE_URL`, then `DATABASE_URL` from `backend/.env`; never put that value in a `VITE_*` variable or commit it. Apply the migration and run the RLS suite against a dedicated test project before trusting RLS in a shared environment.
 
 ## Security posture
 

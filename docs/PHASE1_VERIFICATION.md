@@ -3,9 +3,11 @@
 **Project:** AICTE OneDesk — AICTE institution complaint monitoring and status dashboard  
 **Phase:** 1 — identity, authorization and reference data (PRD §30)  
 **Review date:** 28 October 2026  
-**Status:** **NOT VERIFIED YET.** The live RLS suite has not run because no database
-credentials are configured in this environment. The migration and seed have **not**
-been applied to the linked Supabase project. No destructive SQL was executed.
+**Status:** **DATABASE VERIFICATION PASSED — product sign-off still pending.** The
+migration and reference seed were applied to the linked project on 28 October
+2026, the seven demo identities were provisioned, and the live RLS suite returned
+**14 passed, 0 skipped**. Phase 1 cannot be marked fully signed off until the
+permission decisions in §4.2 and the audit-attribution decision (F8) are approved.
 
 This report is the verification companion to `docs/PHASE1_IMPLEMENTATION.md`. It
 records the migration review, the RLS test review, the permission decisions that
@@ -108,10 +110,11 @@ Remaining security observations (not changed without approval):
 | --- | --- | --- |
 | F8 | `user_role_assignments` has no `revoked_by_user_id` column and there is no general audit table. Revocation attribution is log-only. | Approve an additive audit table or a `revoked_by_user_id` column in a later migration. Do not invent one now. |
 | F9 | `shares_bureau_with(uuid)` is defined but unused and does not check `bureaus.is_active`. | Keep as reserved Phase 2+ helper, or verify it before use. |
-| F10 | `anon` retains table grants on the 22 tables outside Phase 1. RLS is enabled on all 32 tables and there are no policies for those 22, so access is denied by default; this is fail-closed but broader than necessary. | Revoke `anon` from all business tables in a dedicated Phase 2 hardening migration. |
+| F10 | `anon` retains full `ALL` table grants on **7** tables outside Phase 1 (`cases`, `case_relationships`, `complaint_categories`, `duplicate_candidates`, `institution_verification_tasks`, `intake_channels`, `submissions`) plus the 3 reference tables this migration handles. RLS is enabled on all 32 tables and no policies exist, so access is denied by default; this is fail-closed but broader than necessary. | Revoke `anon` from all business tables in a dedicated Phase 2 hardening migration. |
 | F11 | Reference-write API routes use `require_permission` (context-aware) and bureau-membership writes use `require_bureau_capability`, while the DB policies require a **global** manage capability. The current catalogue and `test_bureau_scoped_roles_carry_no_administration_capability` prevent this from being reachable, but the layers should be made explicit. | Either switch these writes to `require_global_permission`, or document that the catalogue invariant is the guard. |
 | F12 | A global `ROLE.MANAGE` holder can edit `role_permissions` directly (no API route) and remove the `ROLE.MANAGE`/`USER.MANAGE` grants from the last Super Admin role, locking out administration. | Add a last-administrator guard or restrict direct Data API writes to `role_permissions`. |
 | F13 | `users.is_super_admin` is a dormant denormalised column. It is ignored by the API, but a future query could trust it. | Keep it ignored; document it; do not use it for authorization. |
+| F14 | The pre-existing `validate_user_role_assignment` trigger reads `users`, `roles`, `bureaus` and `bureau_memberships` with `FOR SHARE`, and PostgreSQL applies the UPDATE policy to a locking read. Inserts therefore depend on the caller also holding the *update* capability for those tables (`ROLE.MANAGE`, `BUREAU.MANAGE`, `USER.MANAGE`, `BUREAU.MEMBERS.*`), not just `USER.MANAGE`. The seeded `SUPER_ADMIN` holds all of them, so the API path works; a future role with only `USER.MANAGE` would see spurious "Role must exist and be active" errors. Unauthorized callers are still denied, but with the trigger message (`P0001`) instead of `42501`. | Before delegating user administration, either make the trigger `SECURITY DEFINER` with an empty `search_path`, or drop the `FOR SHARE` clauses. Requires a separately approved migration. |
 
 ### 2.4 Grants and RLS coverage
 
@@ -192,30 +195,50 @@ administrator.
 - No live test for expired or revoked assignments.
 - No live test for `bureau_memberships` insert/update by a delegated bureau role
   (the current catalogue has no such role).
-- No live test for `anon` on the 22 non-Phase-1 tables; they are fail-closed by
-  missing policies, but a future policy change should add explicit coverage.
+- No live test for `anon` on the 7 non-Phase-1 tables that still hold `anon`
+  grants; they are fail-closed by missing policies, but a future policy change
+  should add explicit coverage.
 - No PostgREST-level test; the tests use the same PostgreSQL roles and GUCs that
   PostgREST uses, which is the security-relevant layer.
 
-### 3.4 Local result
+### 3.4 Results
 
 Command (from `backend/`):
 
 ```bash
-python -m pytest -o addopts= -q --tb=short
+python -m pytest -o addopts= -q
 ```
 
-Result before database credentials:
+The suite resolves its connection string from `TEST_DATABASE_URL`, then
+`DATABASE_URL`, then `DATABASE_URL` in `backend/.env` (the same file the API
+reads), so the 14 live tests run without a duplicate export.
 
-```text
-119 passed, 14 skipped, 13 warnings in 3.79s
-```
+| Stage | Result |
+| --- | --- |
+| Before credentials (unit suite only) | `119 passed, 14 skipped` |
+| Before the migration, with credentials | `1 passed, 2 failed, 11 skipped` — expected: the helpers did not exist and `authenticated` had no grant on `users`; the suite really was talking to the database |
+| Migration + seed applied, no identities | `3 passed, 11 skipped` — explicit skip messages for missing accounts |
+| Migration + seed + 7 demo identities | **`14 passed, 0 skipped`** |
+| Full suite after verification | **`133 passed, 0 skipped, 13 warnings`** |
 
-The 14 skips are exactly the live RLS tests. They are skipped because neither
-`DATABASE_URL` nor `TEST_DATABASE_URL` is configured in this environment, not
-because they passed.
+The final run exercised every policy with real data: ordinary-user self-only
+visibility, bureau-context allow/deny, cross-bureau isolation, profile-update
+denial, reference-write denial, role-grant denial, and the authorised Super Admin
+read/write paths.
 
-**Live RLS result: not run. Phase 1 is not verified.**
+### 3.5 Post-apply object verification
+
+| Check | Expected | Actual |
+| --- | --- | --- |
+| `public` base tables | 32 | 32 |
+| Tables with RLS enabled | 32 | 32 |
+| Phase 1 helper functions | 9 | 9 |
+| Phase 1 policies | 30 | 30 |
+| `permissions` / `roles` / `role_permissions` | 14 / 6 / 37 | 14 / 6 / 37 |
+| `regions` / `bureaus` / `institutions` / `aliases` | 6 / 3 / 5 / 3 | 6 / 3 / 5 / 3 |
+| `anon` grants on the 10 Phase 1 tables | none | none |
+| Helper `EXECUTE` for `anon` | denied | denied for all 9 |
+| `authenticated` grants | select/insert/update (+delete on `role_permissions`) | as planned |
 
 ---
 
@@ -461,14 +484,15 @@ transaction if the catalogue is incomplete.
 
 ```powershell
 cd backend
-$env:DATABASE_URL = "postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require"
 python -m pytest -q tests/test_rls_db.py
 ```
 
-Expected after apply and seed: **14 passed, 0 skipped**. If any test is skipped,
-the environment variable is not visible to pytest. If the suite cannot
-`SET LOCAL ROLE authenticated`, use the Supabase `postgres` connection, not a
-limited app role.
+The suite reads `TEST_DATABASE_URL`, then `DATABASE_URL`, then `DATABASE_URL`
+from `backend/.env`; no export is needed. Expected after apply, seed and demo
+identities: **14 passed, 0 skipped**. Skips mean the actor-discovery fixtures
+found no accounts (run `scripts/seed_demo_users.py`) — not that RLS passed. If
+the suite cannot `SET LOCAL ROLE authenticated`, use the Supabase `postgres`
+connection, not a limited app role.
 
 ### 6.7 Seed demo identities (optional, after reference seed)
 
@@ -541,40 +565,51 @@ objects. Do not drop tables or delete reference rows.
 
 ---
 
-## 7. Remaining blockers
+## 7. Status of blockers
 
-1. **No database credentials in this environment.** `backend/.env` is absent and
-   neither `DATABASE_URL` nor `TEST_DATABASE_URL` is set. The live RLS suite has
-   not run. This is the primary blocker to marking Phase 1 verified.
-2. **Migration and seed not applied.** No SQL was executed against the linked
-   project. The safe procedure is in §6 and awaits approval.
-3. **Permission catalogue sign-off outstanding.** The decisions in §4.2,
+Resolved on 28 October 2026:
+
+1. **Database credentials configured.** `backend/.env` holds the server-side
+   connection string (gitignored, never printed). Connectivity and `SET ROLE`
+   capability were verified.
+2. **Migration and seed applied.** `0001_phase1_identity_rls.sql` and
+   `phase1_identity_seed.sql` were applied with `psql -v ON_ERROR_STOP=1`; the
+   post-apply counts in §3.5 match the plan. Seven demo identities were created
+   with `scripts/seed_demo_users.py`; the shared demo password lives only in
+   `backend/.env`.
+3. **Live RLS suite run.** `14 passed, 0 skipped`; full suite `133 passed`.
+
+Still open:
+
+4. **Permission catalogue sign-off outstanding.** The decisions in §4.2,
    especially Bureau Admin delegation, role differentiation and revocation
    attribution, need explicit product approval.
-4. **Role/action matrix and state-machine baseline not signed off.** PRD §7.3 and
+5. **Role/action matrix and state-machine baseline not signed off.** PRD §7.3 and
    §15.2 are baseline documents, not approved implementation contracts.
-5. **Audit gap.** No general audit table and no `revoked_by_user_id` column;
+6. **Audit gap.** No general audit table and no `revoked_by_user_id` column;
    revocation attribution is log-only.
-6. **No create-user API, password-reset/MFA UI, alias edit/deactivate route, or
+7. **No create-user API, password-reset/MFA UI, alias edit/deactivate route, or
    institution re-verification.** These are documented Phase 1 limitations, not
    verification failures.
-7. **No official category/SLA source.** Phase 2 must confirm the category and SLA
+8. **No official category/SLA source.** Phase 2 must confirm the category and SLA
    source or label assumptions as demo-only.
+9. **Deferred hardening.** `anon` still holds full grants on 7 non-Phase-1 tables
+   (F10), and the assignment trigger couples to the UPDATE policies (F14). Both
+   need separately approved migrations before Phase 2 policies are added.
 
 ---
 
-## 8. What would change the status to "verified"
+## 8. Criteria for full sign-off
 
-All of the following:
+| Criterion | Status |
+| --- | --- |
+| Migration and seed applied using §6 | **done** (28 Oct 2026) |
+| `tests/test_rls_db.py` returns 14 passed, 0 skipped | **done** |
+| Post-apply queries return the expected counts | **done** (§3.5) |
+| Permission decisions in §4.2 explicitly approved (or amended) | **pending** |
+| Audit-attribution decision (F8) recorded | **pending** |
+| Manual smoke check of `/me`, `/users`, bureau context and the inactive account through the running frontend/API | **pending** |
 
-- The permission decisions in §4.2 are explicitly approved (or amended).
-- The migration and seed are applied to the approved project using §6.
-- `tests/test_rls_db.py` runs with **14 passed, 0 skipped**.
-- The post-apply queries in §6.5 return the expected counts.
-- A signed-in person can exercise the authorized paths and is denied the
-  unauthorized paths in §3.2 (manual smoke check of `/me`, `/users`, bureau
-  context and the inactive account).
-- The audit-attribution decision (F8) is recorded.
-
-Until then, the correct status remains **implementation complete, verification
-pending**.
+Database verification is complete; product sign-off is not. Phase 1 remains
+**implementation and database verification complete, product sign-off pending**,
+and Phase 2 must not start until the two pending rows above are decided.
