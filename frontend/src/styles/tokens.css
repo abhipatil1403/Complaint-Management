@@ -1,0 +1,64 @@
+/* Design tokens for AICTE OneDesk.
+ *
+ * The interface uses hand-written CSS with custom properties instead of a
+ * component framework. This keeps the dependency surface small and makes the
+ * visual language explicit. Components only reference these tokens.
+ */
+
+:root {
+  color-scheme: light;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+
+  --color-canvas: #eef2f7;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f6f8fb;
+  --color-surface-raised: #ffffff;
+
+  --color-ink: #16222f;
+  --color-ink-soft: #415366;
+  --color-ink-muted: #6b7c8e;
+  --color-inverse: #ffffff;
+
+  --color-border: #d9e1ea;
+  --color-border-strong: #bfccda;
+
+  --color-primary: #1c4f7c;
+  --color-primary-hover: #153e61;
+  --color-primary-soft: #e8f0f8;
+
+  --color-accent: #0f766e;
+  --color-accent-soft: #e6f4f2;
+
+  --color-danger: #b42318;
+  --color-danger-hover: #912018;
+  --color-danger-soft: #fef3f2;
+
+  --color-success: #067647;
+  --color-success-soft: #ecfdf3;
+
+  --color-warning: #b54708;
+  --color-warning-soft: #fffaeb;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --shadow-sm: 0 1px 2px rgba(16, 34, 51, 0.06);
+  --shadow-md: 0 10px 30px rgba(16, 34, 51, 0.09);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 40px;
+  --space-8: 56px;
+
+  --max-width: 1280px;
+  --focus-ring: 0 0 0 3px rgba(28, 79, 124, 0.22);
+}
