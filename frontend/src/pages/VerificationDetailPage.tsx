@@ -61,12 +61,16 @@ export function VerificationDetailPage() {
     return <PermissionDeniedPage />;
   }
 
-  if (taskLoading) {
+  if (taskLoading && !task) {
     return <Loading label="Loading verification task..." />;
   }
 
-  if (taskError || !task) {
+  if (taskError && !task) {
     return <ErrorPanel error={taskError} title="Unable to load verification task" />;
+  }
+
+  if (!task) {
+    return null;
   }
 
   const isResolved = task.status === "verified" || task.status === "rejected";

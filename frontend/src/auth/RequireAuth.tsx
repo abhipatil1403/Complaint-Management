@@ -9,7 +9,7 @@ export function RequireAuth() {
   const auth = useAuth();
   const location = useLocation();
 
-  if (auth.status === "loading") {
+  if (auth.status === "loading" && !auth.me) {
     return (
       <div className="gate">
         <Loading label="Checking your session and capabilities..." />

@@ -5,8 +5,12 @@ import { type ApiError, type QueryParams, toApiError } from "./api";
 import type { Page } from "../types";
 
 // In-memory cache across navigations to eliminate visible reloading spinners on revisit
-const resourceCache = new Map<string, unknown>();
-const pagedCache = new Map<string, { items: unknown[]; cursor: string | null }>();
+export const resourceCache = new Map<string, unknown>();
+export const pagedCache = new Map<string, { items: unknown[]; cursor: string | null }>();
+
+export function seedResourceCache(path: string, item: unknown): void {
+  resourceCache.set(path, item);
+}
 
 interface PagedResource<T> {
   items: T[];
@@ -38,6 +42,17 @@ export function usePagedResource<T>(
   const [cursor, setCursor] = useState<string | null>(cached ? cached.cursor : null);
   const [loading, setLoading] = useState(enabled && !cached);
   const [error, setError] = useState<ApiError | null>(null);
+
+  // Sync state synchronously if cacheKey changes
+  const prevKeyRef = useRef(cacheKey);
+  if (prevKeyRef.current !== cacheKey) {
+    prevKeyRef.current = cacheKey;
+    const hit = pagedCache.get(cacheKey);
+    setItems(hit ? (hit.items as T[]) : []);
+    setCursor(hit ? hit.cursor : null);
+    setLoading(enabled && !hit);
+    setError(null);
+  }
 
   const generation = useRef(0);
   const itemsRef = useRef(items);
@@ -71,6 +86,20 @@ export function usePagedResource<T>(
 
         if (run !== generation.current) {
           return;
+        }
+
+        // Pre-populate individual detail items into resourceCache so navigating to any detail page is instant
+        const cleanPath = path.split("?")[0].replace(/\/+$/, "");
+        for (const rawItem of page.data) {
+          if (
+            rawItem &&
+            typeof rawItem === "object" &&
+            "id" in rawItem &&
+            typeof (rawItem as { id: unknown }).id === "string"
+          ) {
+            const itemId = (rawItem as { id: string }).id;
+            resourceCache.set(`${cleanPath}/${itemId}`, rawItem);
+          }
         }
 
         if (append) {
@@ -141,6 +170,16 @@ export function useResource<T>(path: string | null): Resource<T> {
   const [data, setData] = useState<T | null>(cached ?? null);
   const [loading, setLoading] = useState(Boolean(path) && !cached);
   const [error, setError] = useState<ApiError | null>(null);
+
+  // Sync state synchronously if path changes
+  const prevPathRef = useRef(path);
+  if (prevPathRef.current !== path) {
+    prevPathRef.current = path;
+    const hit = path ? (resourceCache.get(path) as T | undefined) : undefined;
+    setData(hit ?? null);
+    setLoading(Boolean(path) && !hit);
+    setError(null);
+  }
 
   const generation = useRef(0);
   const dataRef = useRef(data);

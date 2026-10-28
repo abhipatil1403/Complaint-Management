@@ -79,13 +79,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setBootstrapped(true);
     });
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
+      setSession((current) => {
+        if (
+          current?.access_token === nextSession?.access_token &&
+          current?.user?.id === nextSession?.user?.id
+        ) {
+          return current;
+        }
+        return nextSession;
+      });
     });
     return () => {
       mounted = false;
       subscription.subscription.unsubscribe();
     };
   }, []);
+
+  const meRef = useRef<MeResponse | null>(me);
+  useEffect(() => {
+    meRef.current = me;
+  }, [me]);
 
   useEffect(() => {
     if (!bootstrapped) {
@@ -114,7 +127,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const requestedBureau = activeBureauId;
 
     async function loadProfile() {
-      setStatus("loading");
+      // Only show visible gate if we do not already have an authenticated profile
+      if (!meRef.current) {
+        setStatus("loading");
+      }
       try {
         const nextMe = await api.get<MeResponse>("/me", undefined, requestedBureau);
         if (cancelled) {
@@ -143,13 +159,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await supabase!.auth.signOut();
           return;
         }
-        setMe(null);
-        setError(apiError);
-        setStatus(
-          apiError.code === "ACCOUNT_NOT_PROVISIONED" || apiError.code === "ACCOUNT_INACTIVE"
-            ? "no_profile"
-            : "error",
-        );
+        // If we already have a profile in memory, preserve it during transient errors
+        if (!meRef.current) {
+          setMe(null);
+          setError(apiError);
+          setStatus(
+            apiError.code === "ACCOUNT_NOT_PROVISIONED" || apiError.code === "ACCOUNT_INACTIVE"
+              ? "no_profile"
+              : "error",
+          );
+        }
       }
     }
 

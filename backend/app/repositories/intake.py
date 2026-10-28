@@ -49,13 +49,13 @@ _LIST_SQL = """
       from public.submissions s
       join public.intake_channels c on c.id = s.intake_channel_id
       left join public.institutions i on i.id = s.institution_id
-     where (%(channel_code)s is null or c.code = %(channel_code)s)
-       and (%(intake_status)s is null or s.intake_status = %(intake_status)s)
-       and (%(language)s is null or s.original_language = %(language)s)
+     where (%(channel_code)s::text is null or c.code = %(channel_code)s::text)
+       and (%(intake_status)s::text is null or s.intake_status = %(intake_status)s::text)
+       and (%(language)s::text is null or s.original_language = %(language)s::text)
        and (
-             %(q)s is null
-             or s.subject ilike %(q_like)s
-             or s.external_reference ilike %(q_like)s
+             %(q)s::text is null
+             or s.subject ilike %(q_like)s::text
+             or s.external_reference ilike %(q_like)s::text
            )
      order by s.received_at desc, s.id
      limit %(limit)s offset %(offset)s
