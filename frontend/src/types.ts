@@ -197,3 +197,89 @@ export interface Role {
   is_active: boolean;
   permissions: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2.1 — simulated intake
+// ---------------------------------------------------------------------------
+export type IntakeLanguage = "en" | "hi";
+export type DemoPortal = "aicte" | "cpgrams";
+
+export interface DemoChannel {
+  code: string;
+  name: string;
+  channel_type: "portal" | "cpgrams";
+  portal: DemoPortal;
+  is_simulated: boolean;
+}
+
+export interface DemoInfo {
+  demo_mode: boolean;
+  notice: string;
+  phase: string;
+  demo_intake_enabled: boolean;
+  channels: DemoChannel[];
+  simulation_notice_version: string | null;
+  simulation_notice_en: string | null;
+  simulation_notice_hi: string | null;
+}
+
+export interface IntakeChannelRef {
+  code: string;
+  name: string;
+  is_simulated: boolean;
+}
+
+export interface SubmissionInstitutionRef {
+  id: string;
+  aicte_permanent_id: string | null;
+  official_name: string;
+}
+
+export interface SubmissionSummary {
+  id: string;
+  external_reference: string | null;
+  source_event_id: string | null;
+  channel: IntakeChannelRef;
+  received_at: string;
+  institution: SubmissionInstitutionRef | null;
+  institution_name_as_submitted: string | null;
+  subject: string;
+  original_language: string;
+  intake_status: string;
+  canonical_case_id: string | null;
+}
+
+export interface SubmissionDetail extends SubmissionSummary {
+  original_text: string;
+  content_fingerprint: string | null;
+  source_submitted_at: string | null;
+  reference_origin: string | null;
+  simulation_notice_version: string | null;
+  consent_acknowledged: boolean | null;
+  created_at: string;
+}
+
+export interface DemoSubmissionRequest {
+  institution_permanent_id?: string | null;
+  institution_name_as_submitted?: string | null;
+  subject: string;
+  description: string;
+  language: IntakeLanguage;
+  category_code?: string | null;
+  source_event_id?: string | null;
+  source_submitted_at?: string | null;
+  consent_acknowledged: true;
+}
+
+export interface DemoSubmissionReceipt {
+  outcome: "created" | "replay";
+  replayed: boolean;
+  submission_id: string;
+  external_reference: string | null;
+  intake_status: string;
+  received_at: string;
+  institution_resolved: boolean;
+  channel: IntakeChannelRef;
+  demo_notice: string;
+  simulation_notice_version: string;
+}

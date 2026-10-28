@@ -4,11 +4,13 @@ import { useAuth } from "../auth/AuthProvider";
 import { PageHeader, StatusBadge } from "../components/ui";
 import { formatResource, groupPermissionsByResource, membershipName } from "../lib/access";
 
-const PHASE1_NOTES = [
+const PHASE_NOTES = [
   "Identity comes from Supabase Auth; there is no separate password system.",
   "Capabilities are resolved from role grants and re-checked by FastAPI and PostgreSQL.",
   "Reference data is deactivated rather than deleted so history stays intact.",
   "Bureau-scoped capabilities only apply while that bureau is the active context.",
+  "Phase 2.1 intake preserves the original subject, text and language exactly as submitted.",
+  "Only the dedicated intake database role can create a submission; browsers cannot.",
 ];
 
 export function HomePage() {
@@ -23,6 +25,12 @@ export function HomePage() {
   const globalCapabilities = groupPermissionsByResource(me.global_permissions);
 
   const shortcuts = [
+    {
+      to: "/intake",
+      title: "Intake queue",
+      description: "Review preserved submissions from the simulated portals.",
+      visible: has("submission.view"),
+    },
     {
       to: "/institutions",
       title: "Institutions",
@@ -53,7 +61,7 @@ export function HomePage() {
     <section>
       <PageHeader
         title={`Welcome, ${me.user.display_name || me.user.full_name}`}
-        description="Phase 1 covers identity, authorization and reference data. Case, complaint and SLA workflows arrive in later phases."
+        description="Phase 2.1 adds simulated complaint intake and submission preservation. Case, duplicate and SLA workflows arrive in later phases."
       />
 
       <div className="grid grid-3">
@@ -218,15 +226,37 @@ export function HomePage() {
       </div>
 
       <article className="card section">
+        <h2>Simulated intake</h2>
+        <p>
+          Two demonstration portals feed the intake queue. Neither is connected to AICTE or CPGRAMS,
+          and no submission leaves this project.
+        </p>
+        <div className="link-row">
+          <Link to="/demo/aicte" className="button button-quiet">
+            AICTE demo portal
+          </Link>
+          <Link to="/demo/cpgrams" className="button button-quiet">
+            CPGRAMS demo portal
+          </Link>
+        </div>
+        <p className="muted small">
+          Submissions wait in <strong>awaiting institution verification</strong> or{" "}
+          <strong>awaiting duplicate review</strong>. No case is created automatically and no
+          duplicate is merged.
+        </p>
+      </article>
+
+      <article className="card section">
         <h2>Scope of this build</h2>
         <ul className="check-list">
-          {PHASE1_NOTES.map((note) => (
+          {PHASE_NOTES.map((note) => (
             <li key={note}>{note}</li>
           ))}
         </ul>
         <p className="muted small">
           Demonstration only. Every seeded record is illustrative and no real complaint is filed or
-          tracked. Later phases add submissions, duplicate review, assignments and SLA tracking.
+          tracked. Later phases add institution verification, duplicate review, cases, assignments
+          and SLA tracking.
         </p>
       </article>
     </section>

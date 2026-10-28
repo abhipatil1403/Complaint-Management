@@ -133,7 +133,13 @@ def test_liveness_and_demo_info_are_public(client) -> None:
     demo = client.get("/api/v1/demo/info")
     assert demo.status_code == 200
     assert demo.json()["demo_mode"] is True
-    assert demo.json()["phase"].startswith("Phase 1")
+    assert demo.json()["phase"].startswith("Phase 2.1")
+    assert demo.json()["demo_intake_enabled"] is True
+    assert [c["code"] for c in demo.json()["channels"]] == ["AICTE_SIM", "CPGRAMS_SIM"]
+    assert all(c["is_simulated"] for c in demo.json()["channels"])
+    assert "not a real complaint portal" in demo.json()["simulation_notice_en"]
+    assert "सिमुलेशन" in demo.json()["simulation_notice_hi"]
+    assert demo.json()["simulation_notice_version"] == "SIM-NOTICE-2026-10-29-v1"
 
 
 def test_readiness_reflects_database_status(client) -> None:

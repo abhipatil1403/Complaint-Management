@@ -19,12 +19,14 @@ class ApiError(Exception):
         code: str,
         message: str,
         details: list[dict[str, Any]] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
         self.details = details or []
+        self.headers = headers or {}
 
 
 def request_id_of(request: Request) -> str:
@@ -37,9 +39,11 @@ def error_response(
     code: str,
     message: str,
     details: list[dict[str, Any]] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
+        headers=headers,
         content={
             "error": {
                 "code": code,

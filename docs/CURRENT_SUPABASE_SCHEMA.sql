@@ -1,30 +1,41 @@
 -- AICTE OneDesk - current public schema snapshot
--- Generated: 28 October 2026
+-- Generated: 29 October 2026
 -- Source: linked Supabase project (PostgreSQL 17.11)
 -- Command: pg_dump --schema-only --schema=public
 --
 -- This file is a generated snapshot of the live database, not a migration.
--- It supersedes the earlier pre-Phase-1 dump and now reflects:
---   * 32 application tables (no table added, removed or renamed);
---   * the 9 identity helper functions and 30 phase1_* RLS policies from 0001;
---   * validate_user_role_assignment() as SECURITY DEFINER, search_path = '';
---   * assert_global_administrator_remains() and the 7 trg_last_admin_* triggers
---     added by 0002_phase1_security_closure.sql.
+-- It reflects all applied migrations:
+--   * 0001 - 32 application tables, 9 identity helper functions and the
+--     phase1_* RLS policies;
+--   * 0002 - validate_user_role_assignment() SECURITY DEFINER with
+--     search_path = '', assert_global_administrator_remains() and the
+--     trg_last_admin_* triggers;
+--   * 0003_phase2_intake.sql - the one_desk_intake NOLOGIN role, the two
+--     phase2_* RLS policies, and public.create_demo_submission() as a
+--     SECURITY DEFINER function with search_path = '' and an explicit caller
+--     allowlist.
 --
--- Effective grants after 0002:
---   * anon: no table privilege anywhere in public;
---   * authenticated: SELECT/INSERT/UPDATE on the Phase 1 tables, SELECT only on
---     role_permissions, and no TRUNCATE/REFERENCES/TRIGGER on any table.
+-- Effective intake grants after 0003:
+--   * anon: no table privilege anywhere in public and no EXECUTE on the
+--     intake function;
+--   * authenticated: SELECT only on submissions and intake_channels (no
+--     INSERT/UPDATE/DELETE), and no EXECUTE on the intake function;
+--   * one_desk_intake: no table privilege at all; EXECUTE on the one
+--     insert-only intake function;
+--   * postgres: function owner only. Service-role credentials are never used
+--     by the browser.
 -- The ALTER DEFAULT PRIVILEGES statements for anon/authenticated at the end of
 -- this file are Supabase project defaults for future objects; they grant nothing
--- on the existing tables and do not reflect a table grant.
+-- on the existing tables and do not reflect a table grant. 0003 explicitly
+-- revokes the default EXECUTE grant on the new function.
 --
 -- Schema only: no rows, secrets or connection strings are included.
+--
 --
 -- PostgreSQL database dump
 --
 
-\restrict hQ6wxm7TTvKKUJ9mAYlZJhbsJiyDpeNYyWZw6cPwlml5BTpLwuNmb9aD6b2e9ft
+\restrict u7EBgjloR529Sd1AKqGspQLmzEoII5ExLbxeXJHuVMaEmbHG7CeuFcEH3z3FFQj
 
 -- Dumped from database version 17.11
 -- Dumped by pg_dump version 18.1
@@ -258,6 +269,417 @@ $$;
 ALTER FUNCTION public.auth_uid() OWNER TO postgres;
 
 --
+-- Name: create_demo_submission(text, text, text, text, text, text, text, text, text, timestamp with time zone, boolean); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.create_demo_submission(p_channel_code text, p_institution_permanent_id text, p_institution_name_as_submitted text, p_subject text, p_original_text text, p_original_language text, p_category_code text, p_source_event_id text, p_idempotency_key text, p_source_submitted_at timestamp with time zone, p_consent_acknowledged boolean) RETURNS jsonb
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO ''
+    SET statement_timeout TO '15s'
+    AS $$
+declare
+    c_max_subject     constant integer  := 200;
+    c_max_text        constant integer  := 20000;
+    c_max_name        constant integer  := 300;
+    c_max_id          constant integer  := 64;
+    c_max_event       constant integer  := 64;
+    c_max_idem        constant integer  := 128;
+    c_clock_skew      constant interval := interval '5 minutes';
+    c_payload_version constant text     := '1';
+    c_notice_version  constant text     := 'SIM-NOTICE-2026-10-29-v1';
+
+    v_caller_role    text;
+    v_channel_id     uuid;
+    v_channel_code   text;
+    v_channel_name   text;
+    v_channel_sim    boolean;
+    v_pid_raw        text;
+    v_pid            text;
+    v_name           text;
+    v_event          text;
+    v_idem           text;
+    v_category_code  text;
+    v_category_id    uuid;
+    v_language       text;
+    v_text           text;
+    v_subject        text;
+    v_source_at      text;
+    v_match_count    integer;
+    v_institution_id uuid;
+    v_status         text;
+    v_payload        jsonb;
+    v_request_hash   text;
+    v_lock_keys      bigint[];
+    v_rows           integer;
+    v_existing       public.submissions%rowtype;
+    v_new_id         uuid;
+    v_received_at    timestamptz;
+    v_reference      text;
+begin
+    -- ---- 0. caller allowlist (defence in depth) ----------------------------
+    -- The grant already excludes every browser-reachable role. If a future
+    -- change ever granted EXECUTE too widely, the call still does nothing and
+    -- reveals nothing. `role` is the caller's SET ROLE value; `current_user`
+    -- here is the definer and is therefore not usable for this check.
+    v_caller_role := pg_catalog.current_setting('role', true);
+    if v_caller_role is distinct from 'one_desk_intake' then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'channel_unavailable',
+            'code',    'INTAKE_CHANNEL_UNAVAILABLE');
+    end if;
+
+    -- ---- 1. channel --------------------------------------------------------
+    select c.id, c.code, c.name, c.is_simulated
+      into v_channel_id, v_channel_code, v_channel_name, v_channel_sim
+      from public.intake_channels c
+     where c.code = pg_catalog.upper(pg_catalog.btrim(coalesce(p_channel_code, '')))
+       and c.is_active
+       and c.is_simulated
+       and c.channel_type in ('portal', 'cpgrams');
+
+    if v_channel_id is null then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'channel_unavailable',
+            'code',    'INTAKE_CHANNEL_UNAVAILABLE');
+    end if;
+
+    -- ---- 2. consent --------------------------------------------------------
+    if p_consent_acknowledged is not true then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'CONSENT_REQUIRED',
+            'field',   'consent_acknowledged');
+    end if;
+
+    -- ---- 3. language -------------------------------------------------------
+    if p_original_language is null
+       or pg_catalog.lower(pg_catalog.btrim(p_original_language)) not in ('en', 'hi') then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'UNSUPPORTED_LANGUAGE',
+            'field',   'original_language');
+    end if;
+    v_language := pg_catalog.lower(pg_catalog.btrim(p_original_language));
+
+    -- ---- 4. subject (stored verbatim) --------------------------------------
+    v_subject := p_subject;
+    if v_subject is null or pg_catalog.btrim(v_subject) = '' then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'SUBJECT_REQUIRED',
+            'field',   'subject');
+    end if;
+    if pg_catalog.length(v_subject) > c_max_subject then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'SUBJECT_TOO_LONG',
+            'field',   'subject');
+    end if;
+    if v_subject ~ E'[\\x01-\\x1F\\x7F]' then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'SUBJECT_INVALID_CHARACTERS',
+            'field',   'subject');
+    end if;
+
+    -- ---- 5. complaint body (stored verbatim, never normalized) -------------
+    v_text := p_original_text;
+    if v_text is null or pg_catalog.btrim(v_text) = '' then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'TEXT_REQUIRED',
+            'field',   'original_text');
+    end if;
+    if pg_catalog.length(v_text) > c_max_text then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'TEXT_TOO_LONG',
+            'field',   'original_text');
+    end if;
+    if v_text ~ E'[\\x01-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]' then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'TEXT_INVALID_CHARACTERS',
+            'field',   'original_text');
+    end if;
+
+    -- ---- 6. institution identifiers ----------------------------------------
+    v_pid_raw := nullif(pg_catalog.btrim(p_institution_permanent_id), '');
+    if v_pid_raw is not null then
+        if pg_catalog.length(v_pid_raw) > c_max_id then
+            return pg_catalog.jsonb_build_object(
+                'outcome', 'validation_error',
+                'code',    'INSTITUTION_ID_TOO_LONG',
+                'field',   'institution_permanent_id');
+        end if;
+        v_pid := v_pid_raw;
+    end if;
+
+    if p_institution_name_as_submitted is not null
+       and pg_catalog.btrim(p_institution_name_as_submitted) <> '' then
+        if pg_catalog.length(p_institution_name_as_submitted) > c_max_name then
+            return pg_catalog.jsonb_build_object(
+                'outcome', 'validation_error',
+                'code',    'INSTITUTION_NAME_TOO_LONG',
+                'field',   'institution_name_as_submitted');
+        end if;
+        -- stored exactly as submitted
+        v_name := p_institution_name_as_submitted;
+    end if;
+
+    if v_pid is null and v_name is null then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'INSTITUTION_IDENTIFIER_REQUIRED',
+            'field',   'institution');
+    end if;
+
+    -- ---- 7. category (optional; 0 categories are seeded in 2.1) ------------
+    v_category_code := nullif(pg_catalog.upper(pg_catalog.btrim(coalesce(p_category_code, ''))), '');
+    if v_category_code is not null then
+        select cat.id into v_category_id
+          from public.complaint_categories cat
+         where cat.code = v_category_code
+           and cat.is_active;
+        if v_category_id is null then
+            return pg_catalog.jsonb_build_object(
+                'outcome', 'validation_error',
+                'code',    'UNKNOWN_CATEGORY',
+                'field',   'category_code');
+        end if;
+    end if;
+
+    -- ---- 8. source identity ------------------------------------------------
+    v_event := nullif(pg_catalog.btrim(p_source_event_id), '');
+    if v_event is not null and pg_catalog.length(v_event) > c_max_event then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'SOURCE_EVENT_ID_TOO_LONG',
+            'field',   'source_event_id');
+    end if;
+
+    v_idem := nullif(pg_catalog.btrim(p_idempotency_key), '');
+    if v_idem is not null and pg_catalog.length(v_idem) > c_max_idem then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'IDEMPOTENCY_KEY_TOO_LONG',
+            'field',   'idempotency_key');
+    end if;
+
+    if p_source_submitted_at is not null
+       and p_source_submitted_at > pg_catalog.now() + c_clock_skew then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'validation_error',
+            'code',    'SOURCE_TIME_IN_FUTURE',
+            'field',   'source_submitted_at');
+    end if;
+
+    -- Normalised once: the same string is hashed and stored, so the hash input
+    -- and the preserved provenance can never drift apart.
+    v_source_at := case
+                       when p_source_submitted_at is null then null
+                       else pg_catalog.to_char(
+                                p_source_submitted_at at time zone 'UTC',
+                                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+                   end;
+
+    -- ---- 9. institution resolution (exact, fail closed) --------------------
+    if v_pid is not null then
+        select count(*), (pg_catalog.array_agg(i.id))[1]
+          into v_match_count, v_institution_id
+          from public.institutions i
+         where i.aicte_permanent_id = v_pid
+           and i.verification_status = 'verified'
+           and i.is_active;
+
+        if v_match_count <> 1 then
+            v_institution_id := null;   -- unresolved: Phase 2.2 decides
+        end if;
+    end if;
+
+    v_status := case
+                    when v_institution_id is null
+                        then 'awaiting_institution_verification'
+                    else 'awaiting_duplicate_review'
+                end;
+
+    -- ---- 10. canonical payload --------------------------------------------
+    v_payload := pg_catalog.jsonb_build_object(
+        'payload_version',               c_payload_version,
+        'channel_code',                  v_channel_code,
+        'institution_permanent_id',      v_pid,
+        'institution_name_as_submitted', v_name,
+        'subject',                       v_subject,
+        'original_text',                 v_text,
+        'original_language',             v_language,
+        'category_code',                 v_category_code,
+        'source_event_id',               v_event,
+        'source_submitted_at',           v_source_at
+    );
+
+    v_request_hash := pg_catalog.encode(
+        pg_catalog.sha256(pg_catalog.convert_to(v_payload::text, 'UTF8')), 'hex');
+
+    -- ---- 11. serialise concurrent retries on the same identity ------------
+    v_lock_keys := pg_catalog.array_remove(array[
+        case when v_idem is not null then
+            pg_catalog.hashtextextended('demo_intake:idem:' || v_channel_id::text || ':' || v_idem, 0)
+        end,
+        case when v_event is not null then
+            pg_catalog.hashtextextended('demo_intake:event:' || v_channel_id::text || ':' || v_event, 0)
+        end
+    ], null);
+
+    if pg_catalog.array_length(v_lock_keys, 1) is not null then
+        perform pg_catalog.pg_advisory_xact_lock(s.k)
+           from (select distinct k from pg_catalog.unnest(v_lock_keys) as t(k) order by k) s;
+    end if;
+
+    -- ---- 12. replay / conflict pre-check ----------------------------------
+    select count(distinct s.id) into v_rows
+      from public.submissions s
+     where s.intake_channel_id = v_channel_id
+       and (   (v_idem  is not null and s.idempotency_key = v_idem)
+            or (v_event is not null and s.source_event_id  = v_event));
+
+    if v_rows > 1 then
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'conflict',
+            'code',    'SOURCE_IDENTITY_CONFLICT');
+    end if;
+
+    if v_rows = 1 then
+        select * into v_existing
+          from public.submissions s
+         where s.intake_channel_id = v_channel_id
+           and (   (v_idem  is not null and s.idempotency_key = v_idem)
+                or (v_event is not null and s.source_event_id  = v_event))
+         order by s.received_at, s.id
+         limit 1;
+
+        if v_existing.source_metadata ->> 'request_hash' = v_request_hash
+           and v_existing.source_metadata ->> 'payload_version' = c_payload_version then
+            return pg_catalog.jsonb_build_object(
+                'outcome',              'replay',
+                'submission_id',        v_existing.id,
+                'channel_code',         v_channel_code,
+                'channel_name',         v_channel_name,
+                'is_simulated',         v_channel_sim,
+                'external_reference',   v_existing.external_reference,
+                'intake_status',        v_existing.intake_status,
+                'institution_resolved', v_existing.institution_id is not null,
+                'received_at',          v_existing.received_at);
+        end if;
+
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'conflict',
+            'code',    'IDEMPOTENCY_PAYLOAD_MISMATCH');
+    end if;
+
+    -- ---- 13. insert exactly once ------------------------------------------
+    v_reference := 'SIM-' || v_channel_code || '-'
+        || pg_catalog.to_char(pg_catalog.now() at time zone 'UTC', 'YYYYMMDD') || '-'
+        || pg_catalog.substr(pg_catalog.replace(pg_catalog.gen_random_uuid()::text, '-', ''), 1, 12);
+
+    begin
+        insert into public.submissions (
+            intake_channel_id,
+            external_reference,
+            source_event_id,
+            institution_id,
+            institution_name_as_submitted,
+            category_id,
+            subject,
+            original_text,
+            original_language,
+            normalized_text,
+            normalization_version,
+            submitter_reference,
+            intake_status,
+            content_fingerprint,
+            idempotency_key,
+            source_metadata
+        ) values (
+            v_channel_id,
+            v_reference,
+            v_event,
+            v_institution_id,
+            v_name,
+            v_category_id,
+            v_subject,
+            v_text,
+            v_language,
+            null,   -- no normalization in 2.1
+            null,
+            null,   -- no submitter identity is collected (D9)
+            v_status,
+            pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(v_text, 'UTF8')), 'hex'),
+            v_idem,
+            pg_catalog.jsonb_build_object(
+                'demo',                                  true,
+                'simulation_notice_version',             c_notice_version,
+                'consent_acknowledged',                  true,
+                'reference_origin',                      'demo_generated',
+                'payload_version',                       c_payload_version,
+                'request_hash',                          v_request_hash,
+                'fingerprint_version',                   'sha256-v1',
+                'institution_permanent_id_as_submitted', v_pid_raw,
+                'source_submitted_at',                   v_source_at,
+                'received_at_origin',                    'server_clock')
+        )
+        returning id, received_at into v_new_id, v_received_at;
+
+    exception when unique_violation then
+        -- Backstop: a concurrent writer won the race despite the advisory lock
+        -- (or a unique constraint outside our keys fired).
+        select * into v_existing
+          from public.submissions s
+         where s.intake_channel_id = v_channel_id
+           and (   (v_idem  is not null and s.idempotency_key = v_idem)
+                or (v_event is not null and s.source_event_id  = v_event))
+         order by s.received_at, s.id
+         limit 1;
+
+        if v_existing.id is null then
+            raise;
+        end if;
+
+        if v_existing.source_metadata ->> 'request_hash' = v_request_hash
+           and v_existing.source_metadata ->> 'payload_version' = c_payload_version then
+            return pg_catalog.jsonb_build_object(
+                'outcome',              'replay',
+                'submission_id',        v_existing.id,
+                'channel_code',         v_channel_code,
+                'channel_name',         v_channel_name,
+                'is_simulated',         v_channel_sim,
+                'external_reference',   v_existing.external_reference,
+                'intake_status',        v_existing.intake_status,
+                'institution_resolved', v_existing.institution_id is not null,
+                'received_at',          v_existing.received_at);
+        end if;
+
+        return pg_catalog.jsonb_build_object(
+            'outcome', 'conflict',
+            'code',    'IDEMPOTENCY_PAYLOAD_MISMATCH');
+    end;
+
+    return pg_catalog.jsonb_build_object(
+        'outcome',              'created',
+        'submission_id',        v_new_id,
+        'channel_code',         v_channel_code,
+        'channel_name',         v_channel_name,
+        'is_simulated',         v_channel_sim,
+        'external_reference',   v_reference,
+        'intake_status',        v_status,
+        'institution_resolved', v_institution_id is not null,
+        'received_at',          v_received_at);
+end;
+$$;
+
+
+ALTER FUNCTION public.create_demo_submission(p_channel_code text, p_institution_permanent_id text, p_institution_name_as_submitted text, p_subject text, p_original_text text, p_original_language text, p_category_code text, p_source_event_id text, p_idempotency_key text, p_source_submitted_at timestamp with time zone, p_consent_acknowledged boolean) OWNER TO postgres;
+
+--
 -- Name: has_global_permission(text); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
@@ -431,11 +853,17 @@ CREATE FUNCTION public.prevent_case_action_history_mutation() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
+
 BEGIN
+
     RAISE EXCEPTION
+
         'Case action history is append-only: % not permitted',
+
         TG_OP;
+
 END;
+
 $$;
 
 
@@ -448,10 +876,15 @@ ALTER FUNCTION public.prevent_case_action_history_mutation() OWNER TO postgres;
 CREATE FUNCTION public.set_updated_at() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
+
 BEGIN
+
     NEW.updated_at = now();
+
     RETURN NEW;
+
 END;
+
 $$;
 
 
@@ -490,58 +923,111 @@ CREATE FUNCTION public.validate_case_access_grant() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
+
 DECLARE
+
     request_record RECORD;
+
 BEGIN
+
     IF NEW.access_request_id IS NOT NULL THEN
 
+
+
         SELECT
+
             case_id,
+
             requester_user_id,
+
             requested_access_level,
+
             request_status,
+
             reviewed_by_user_id
+
         INTO request_record
+
         FROM public.case_access_requests
+
         WHERE id = NEW.access_request_id
+
         FOR SHARE;
 
+
+
         IF NOT FOUND THEN
+
             RAISE EXCEPTION
+
                 'Referenced access request does not exist';
+
         END IF;
+
+
 
         IF request_record.request_status <> 'approved' THEN
+
             RAISE EXCEPTION
+
                 'Access grants require an approved request';
+
         END IF;
+
+
 
         IF request_record.case_id <> NEW.case_id THEN
+
             RAISE EXCEPTION
+
                 'Grant case must match access request case';
+
         END IF;
+
+
 
         IF request_record.requester_user_id <> NEW.grantee_user_id THEN
+
             RAISE EXCEPTION
+
                 'Grant user must match access requester';
+
         END IF;
+
+
 
         IF request_record.requested_access_level = 'details'
+
            AND NEW.access_level = 'collaborate' THEN
+
             RAISE EXCEPTION
+
                 'Grant cannot exceed requested access level';
+
         END IF;
 
+
+
         IF request_record.reviewed_by_user_id
+
            IS DISTINCT FROM NEW.granted_by_user_id THEN
+
             RAISE EXCEPTION
+
                 'Granting user must match the request approver';
+
         END IF;
+
+
 
     END IF;
 
+
+
     RETURN NEW;
+
 END;
+
 $$;
 
 
@@ -555,59 +1041,113 @@ CREATE FUNCTION public.validate_case_creation() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
+
 DECLARE
+
     institution_is_eligible BOOLEAN;
+
     source_institution_id UUID;
+
     source_status TEXT;
+
     source_case_id UUID;
+
 BEGIN
+
     SELECT (
+
         verification_status = 'verified'
+
         AND is_active = TRUE
+
     )
+
     INTO institution_is_eligible
+
     FROM public.institutions
+
     WHERE id = NEW.institution_id
+
     FOR SHARE;
 
+
+
     IF institution_is_eligible IS DISTINCT FROM TRUE THEN
+
         RAISE EXCEPTION
+
             'Case requires an active, verified institution';
+
     END IF;
+
+
 
     SELECT
+
         institution_id,
+
         intake_status,
+
         canonical_case_id
+
     INTO
+
         source_institution_id,
+
         source_status,
+
         source_case_id
+
     FROM public.submissions
+
     WHERE id = NEW.source_submission_id
+
     FOR UPDATE;
 
+
+
     IF NOT FOUND THEN
+
         RAISE EXCEPTION 'Source submission not found';
+
     END IF;
+
+
 
     IF source_institution_id IS DISTINCT FROM NEW.institution_id THEN
+
         RAISE EXCEPTION
+
             'Case institution must match source submission institution';
+
     END IF;
+
+
 
     IF source_status <> 'ready_for_case_creation' THEN
+
         RAISE EXCEPTION
+
             'Source submission must be ready for case creation';
+
     END IF;
+
+
 
     IF source_case_id IS NOT NULL THEN
+
         RAISE EXCEPTION
+
             'Source submission is already associated with a case';
+
     END IF;
 
+
+
     RETURN NEW;
+
 END;
+
 $$;
 
 
@@ -621,59 +1161,113 @@ CREATE FUNCTION public.validate_case_deadline() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
+
 DECLARE
+
     assignment_case_id UUID;
+
     policy_record RECORD;
+
 BEGIN
+
     SELECT
+
         policy_status,
+
         effective_from,
+
         effective_until,
+
         response_minutes,
+
         resolution_minutes
+
     INTO policy_record
+
     FROM public.sla_policies
+
     WHERE id = NEW.sla_policy_id
+
     FOR SHARE;
 
+
+
     IF NOT FOUND
+
        OR policy_record.policy_status <> 'approved'
+
        OR policy_record.effective_from > NEW.clock_started_at
+
        OR (
+
            policy_record.effective_until IS NOT NULL
+
            AND policy_record.effective_until <= NEW.clock_started_at
+
        ) THEN
+
         RAISE EXCEPTION
+
             'Deadline requires an approved SLA policy effective at clock start';
+
     END IF;
+
+
 
     IF NEW.deadline_type = 'first_response'
+
        AND policy_record.response_minutes IS NULL THEN
+
         RAISE EXCEPTION
+
             'SLA policy does not define a first-response duration';
+
     END IF;
+
+
 
     IF NEW.deadline_type = 'resolution'
+
        AND policy_record.resolution_minutes IS NULL THEN
+
         RAISE EXCEPTION
+
             'SLA policy does not define a resolution duration';
+
     END IF;
+
+
 
     IF NEW.case_bureau_assignment_id IS NOT NULL THEN
+
         SELECT case_id
+
         INTO assignment_case_id
+
         FROM public.case_bureau_assignments
+
         WHERE id = NEW.case_bureau_assignment_id
+
         FOR SHARE;
 
+
+
         IF assignment_case_id IS DISTINCT FROM NEW.case_id THEN
+
             RAISE EXCEPTION
+
                 'Deadline bureau assignment belongs to another case';
+
         END IF;
+
     END IF;
 
+
+
     RETURN NEW;
+
 END;
+
 $$;
 
 
@@ -687,52 +1281,99 @@ CREATE FUNCTION public.validate_case_escalation() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
+
 DECLARE
+
     deadline_case_id UUID;
+
     linked_policy_id UUID;
+
     rule_policy_id UUID;
+
     rule_enabled BOOLEAN;
+
 BEGIN
+
     IF NEW.case_deadline_id IS NOT NULL THEN
+
         SELECT case_id, sla_policy_id
+
         INTO deadline_case_id, linked_policy_id
+
         FROM public.case_deadlines
+
         WHERE id = NEW.case_deadline_id
+
         FOR SHARE;
+
+
 
         IF deadline_case_id IS DISTINCT FROM NEW.case_id THEN
+
             RAISE EXCEPTION
+
                 'Escalation deadline belongs to another case';
+
         END IF;
+
     END IF;
+
+
 
     IF NEW.escalation_rule_id IS NOT NULL THEN
+
         SELECT sla_policy_id, is_active
+
         INTO rule_policy_id, rule_enabled
+
         FROM public.escalation_rules
+
         WHERE id = NEW.escalation_rule_id
+
         FOR SHARE;
 
+
+
         IF NEW.escalation_type = 'automatic'
+
            AND rule_enabled IS DISTINCT FROM TRUE THEN
+
             RAISE EXCEPTION
+
                 'Automatic escalation requires an active rule';
+
         END IF;
+
+
 
         IF rule_policy_id IS NOT NULL THEN
+
             IF NEW.case_deadline_id IS NULL
+
                OR linked_policy_id IS DISTINCT FROM rule_policy_id THEN
+
                 RAISE EXCEPTION
+
                     'Escalation rule SLA policy must match the deadline';
+
             END IF;
+
         END IF;
+
     ELSIF NEW.escalation_type = 'automatic' THEN
+
         RAISE EXCEPTION
+
             'Automatic escalation requires an escalation rule';
+
     END IF;
 
+
+
     RETURN NEW;
+
 END;
+
 $$;
 
 
@@ -746,42 +1387,79 @@ CREATE FUNCTION public.validate_case_transfer() RETURNS trigger
     LANGUAGE plpgsql
     SET search_path TO ''
     AS $$
+
 DECLARE
+
     source_case_id UUID;
+
     destination_case_id UUID;
+
 BEGIN
+
     IF NEW.from_bureau_assignment_id IS NOT NULL THEN
 
+
+
         SELECT case_id
+
         INTO source_case_id
+
         FROM public.case_bureau_assignments
+
         WHERE id = NEW.from_bureau_assignment_id
+
         FOR SHARE;
 
+
+
         IF source_case_id IS DISTINCT FROM NEW.case_id THEN
+
             RAISE EXCEPTION
+
                 'Source bureau assignment belongs to another case';
+
         END IF;
 
+
+
     END IF;
+
+
 
     IF NEW.to_bureau_assignment_id IS NOT NULL THEN
 
+
+
         SELECT case_id
+
         INTO destination_case_id
+
         FROM public.case_bureau_assignments
+
         WHERE id = NEW.to_bureau_assignment_id
+
         FOR SHARE;
 
+
+
         IF destination_case_id IS DISTINCT FROM NEW.case_id THEN
+
             RAISE EXCEPTION
+
                 'Destination bureau assignment belongs to another case';
+
         END IF;
+
+
 
     END IF;
 
+
+
     RETURN NEW;
+
 END;
+
 $$;
 
 
@@ -4556,6 +5234,20 @@ CREATE POLICY phase1_users_update_admin ON public.users FOR UPDATE TO authentica
 
 
 --
+-- Name: intake_channels phase2_intake_channels_select_active; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY phase2_intake_channels_select_active ON public.intake_channels FOR SELECT TO authenticated USING (public.is_active_user());
+
+
+--
+-- Name: submissions phase2_submissions_select_authorized; Type: POLICY; Schema: public; Owner: postgres
+--
+
+CREATE POLICY phase2_submissions_select_authorized ON public.submissions FOR SELECT TO authenticated USING (public.has_global_permission('SUBMISSION.VIEW'::text));
+
+
+--
 -- Name: regions; Type: ROW SECURITY; Schema: public; Owner: postgres
 --
 
@@ -4605,6 +5297,7 @@ GRANT USAGE ON SCHEMA public TO postgres;
 GRANT USAGE ON SCHEMA public TO anon;
 GRANT USAGE ON SCHEMA public TO authenticated;
 GRANT USAGE ON SCHEMA public TO service_role;
+GRANT USAGE ON SCHEMA public TO one_desk_intake;
 
 
 --
@@ -4633,6 +5326,14 @@ GRANT ALL ON FUNCTION public.assert_global_administrator_remains() TO service_ro
 REVOKE ALL ON FUNCTION public.auth_uid() FROM PUBLIC;
 GRANT ALL ON FUNCTION public.auth_uid() TO authenticated;
 GRANT ALL ON FUNCTION public.auth_uid() TO service_role;
+
+
+--
+-- Name: FUNCTION create_demo_submission(p_channel_code text, p_institution_permanent_id text, p_institution_name_as_submitted text, p_subject text, p_original_text text, p_original_language text, p_category_code text, p_source_event_id text, p_idempotency_key text, p_source_submitted_at timestamp with time zone, p_consent_acknowledged boolean); Type: ACL; Schema: public; Owner: postgres
+--
+
+REVOKE ALL ON FUNCTION public.create_demo_submission(p_channel_code text, p_institution_permanent_id text, p_institution_name_as_submitted text, p_subject text, p_original_text text, p_original_language text, p_category_code text, p_source_event_id text, p_idempotency_key text, p_source_submitted_at timestamp with time zone, p_consent_acknowledged boolean) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.create_demo_submission(p_channel_code text, p_institution_permanent_id text, p_institution_name_as_submitted text, p_subject text, p_original_text text, p_original_language text, p_category_code text, p_source_event_id text, p_idempotency_key text, p_source_submitted_at timestamp with time zone, p_consent_acknowledged boolean) TO one_desk_intake;
 
 
 --
@@ -4930,7 +5631,7 @@ GRANT SELECT,INSERT,UPDATE ON TABLE public.institutions TO authenticated;
 -- Name: TABLE intake_channels; Type: ACL; Schema: public; Owner: postgres
 --
 
-GRANT SELECT,INSERT,DELETE,MAINTAIN,UPDATE ON TABLE public.intake_channels TO authenticated;
+GRANT SELECT ON TABLE public.intake_channels TO authenticated;
 GRANT ALL ON TABLE public.intake_channels TO service_role;
 
 
@@ -4991,7 +5692,7 @@ GRANT ALL ON TABLE public.sla_policies TO service_role;
 -- Name: TABLE submissions; Type: ACL; Schema: public; Owner: postgres
 --
 
-GRANT SELECT,INSERT,DELETE,MAINTAIN,UPDATE ON TABLE public.submissions TO authenticated;
+GRANT SELECT ON TABLE public.submissions TO authenticated;
 GRANT ALL ON TABLE public.submissions TO service_role;
 
 
@@ -5075,5 +5776,5 @@ ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT ALL ON T
 -- PostgreSQL database dump complete
 --
 
-\unrestrict hQ6wxm7TTvKKUJ9mAYlZJhbsJiyDpeNYyWZw6cPwlml5BTpLwuNmb9aD6b2e9ft
+\unrestrict u7EBgjloR529Sd1AKqGspQLmzEoII5ExLbxeXJHuVMaEmbHG7CeuFcEH3z3FFQj
 

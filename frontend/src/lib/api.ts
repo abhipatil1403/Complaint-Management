@@ -136,32 +136,95 @@ export class ApiClient {
     if (response.status === 204) {
       return undefined as T;
     }
+    return interpretResponse<T>(response);
+  }
+}
 
-    const raw = await response.text();
-    let payload: unknown = null;
-    if (raw) {
-      try {
-        payload = JSON.parse(raw);
-      } catch {
-        payload = null;
+async function interpretResponse<T>(response: Response): Promise<T> {
+  const raw = await response.text();
+  let payload: unknown = null;
+  if (raw) {
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      payload = null;
+    }
+  }
+
+  if (!response.ok) {
+    const envelope = payload as
+      | { error?: { code?: string; message?: string; details?: ApiErrorDetail[]; request_id?: string } }
+      | null;
+    const apiError = envelope?.error;
+    throw new ApiError(
+      response.status,
+      apiError?.code ?? "HTTP_ERROR",
+      apiError?.message ?? `The request failed (HTTP ${response.status}).`,
+      apiError?.details ?? [],
+      apiError?.request_id,
+    );
+  }
+
+  return payload as T;
+}
+
+export interface PublicRequestOptions {
+  method?: "GET" | "POST";
+  body?: unknown;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
+/**
+ * Anonymous client for the simulated portals.
+ *
+ * It never reads the Supabase session and never sends an Authorization header,
+ * matching the public FastAPI route. The server still enforces the demo flags,
+ * the rate limit and the database caller allowlist.
+ */
+export class PublicApiClient {
+  private readonly baseUrl: string;
+
+  constructor(baseUrl: string) {
+    this.baseUrl = baseUrl.replace(/\/$/, "");
+  }
+
+  get<T>(path: string, params?: QueryParams): Promise<T> {
+    return this.request<T>(`${path}${buildQuery(params)}`);
+  }
+
+  post<T>(path: string, body?: unknown, headers?: Record<string, string>): Promise<T> {
+    return this.request<T>(path, { method: "POST", body, headers });
+  }
+
+  private async request<T>(path: string, options: PublicRequestOptions = {}): Promise<T> {
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      ...(options.headers ?? {}),
+    };
+    if (options.body !== undefined) {
+      headers["Content-Type"] = "application/json";
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        method: options.method ?? "GET",
+        headers,
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        signal: options.signal,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw error;
       }
+      throw new ApiError(0, "NETWORK_ERROR", "The API could not be reached.");
     }
 
-    if (!response.ok) {
-      const envelope = payload as
-        | { error?: { code?: string; message?: string; details?: ApiErrorDetail[]; request_id?: string } }
-        | null;
-      const apiError = envelope?.error;
-      throw new ApiError(
-        response.status,
-        apiError?.code ?? "HTTP_ERROR",
-        apiError?.message ?? `The request failed (HTTP ${response.status}).`,
-        apiError?.details ?? [],
-        apiError?.request_id,
-      );
+    if (response.status === 204) {
+      return undefined as T;
     }
-
-    return payload as T;
+    return interpretResponse<T>(response);
   }
 }
 

@@ -6,9 +6,13 @@ import { AppShell } from "./components/AppShell";
 import { AdministrationPage } from "./pages/AdministrationPage";
 import { BureauDetailPage } from "./pages/BureauDetailPage";
 import { BureausPage } from "./pages/BureausPage";
+import { DemoHomePage } from "./pages/DemoHomePage";
+import { DemoIntakePage } from "./pages/DemoIntakePage";
 import { HomePage } from "./pages/HomePage";
 import { InstitutionDetailPage } from "./pages/InstitutionDetailPage";
 import { InstitutionsPage } from "./pages/InstitutionsPage";
+import { IntakeDetailPage } from "./pages/IntakeDetailPage";
+import { IntakePage } from "./pages/IntakePage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { RegionsPage } from "./pages/RegionsPage";
 import { SignInPage } from "./pages/SignInPage";
@@ -20,9 +24,14 @@ export function App() {
       <AuthProvider>
         <Routes>
           <Route path="/sign-in" element={<SignInPage />} />
+          <Route path="/demo" element={<DemoHomePage />} />
+          <Route path="/demo/aicte" element={<DemoIntakePage portal="aicte" />} />
+          <Route path="/demo/cpgrams" element={<DemoIntakePage portal="cpgrams" />} />
           <Route element={<RequireAuth />}>
             <Route element={<AppShell />}>
               <Route index element={<HomePage />} />
+              <Route path="intake" element={<IntakePage />} />
+              <Route path="intake/:submissionId" element={<IntakeDetailPage />} />
               <Route path="institutions" element={<InstitutionsPage />} />
               <Route path="institutions/:institutionId" element={<InstitutionDetailPage />} />
               <Route path="bureaus" element={<BureausPage />} />

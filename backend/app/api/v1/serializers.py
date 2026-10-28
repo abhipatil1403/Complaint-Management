@@ -63,6 +63,62 @@ def institution_detail(row: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def submission_channel(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "code": row["channel_code"],
+        "name": row["channel_name"],
+        "is_simulated": bool(row["channel_is_simulated"]),
+    }
+
+
+def _institution_ref(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    if not row.get("institution_id") or not row.get("official_name"):
+        return None
+    return {
+        "id": row["institution_id"],
+        "aicte_permanent_id": row.get("aicte_permanent_id"),
+        "official_name": row["official_name"],
+    }
+
+
+def submission_summary(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Queue/index shape.
+
+    ``original_text`` is deliberately absent: complaint bodies are only
+    returned by the authorized detail endpoint.
+    """
+    return {
+        "id": row["id"],
+        "external_reference": row.get("external_reference"),
+        "source_event_id": row.get("source_event_id"),
+        "channel": submission_channel(row),
+        "received_at": row["received_at"],
+        "institution": _institution_ref(row),
+        "institution_name_as_submitted": row.get("institution_name_as_submitted"),
+        "subject": row["subject"],
+        "original_language": row["original_language"],
+        "intake_status": row["intake_status"],
+        "canonical_case_id": row.get("canonical_case_id"),
+    }
+
+
+def submission_detail(row: Mapping[str, Any]) -> dict[str, Any]:
+    payload = submission_summary(row)
+    metadata = row.get("source_metadata") or {}
+    payload.update(
+        {
+            "original_text": row["original_text"],
+            "content_fingerprint": row.get("content_fingerprint"),
+            "source_submitted_at": metadata.get("source_submitted_at"),
+            "reference_origin": metadata.get("reference_origin"),
+            "simulation_notice_version": metadata.get("simulation_notice_version"),
+            "consent_acknowledged": metadata.get("consent_acknowledged"),
+            "created_at": row["created_at"],
+        }
+    )
+    return payload
+
+
 def bureau_payload(row: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "id": row["id"],

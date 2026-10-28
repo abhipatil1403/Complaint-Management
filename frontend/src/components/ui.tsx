@@ -83,6 +83,12 @@ const KNOWN_BADGES = new Set([
   "expired",
   "global",
   "bureau",
+  "received",
+  "awaiting_institution_verification",
+  "awaiting_duplicate_review",
+  "ready_for_case_creation",
+  "associated_with_case",
+  "simulated",
 ]);
 
 export function StatusBadge({ value, label }: { value: string; label?: string }) {

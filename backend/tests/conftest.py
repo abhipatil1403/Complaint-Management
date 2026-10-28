@@ -36,6 +36,9 @@ INACTIVE_ID = UUID("99999999-9999-9999-9999-999999999999")
 UNPROVISIONED_ID = UUID("88888888-8888-8888-8888-888888888888")
 
 ALL_PHASE1 = frozenset(perms.PHASE1_PERMISSIONS)
+# Super Admin also holds the explicit Phase 2.1 intake capability. The Phase 1
+# catalogue is frozen, so the two catalogues stay separate.
+SUPER_PERMISSIONS = ALL_PHASE1 | frozenset(perms.PHASE2_ROLE_GRANTS[perms.SUPER_ADMIN])
 
 
 def role_permissions(role_code: str) -> frozenset[str]:
@@ -79,9 +82,9 @@ def build_personas() -> dict[UUID, Principal]:
         designation="System administrator",
         employee_code="DEMO-0001",
         account_status="active",
-        roles=(_role(perms.SUPER_ADMIN, "Super Admin", ALL_PHASE1, None),),
+        roles=(_role(perms.SUPER_ADMIN, "Super Admin", SUPER_PERMISSIONS, None),),
         memberships=(),
-        global_permissions=ALL_PHASE1,
+        global_permissions=SUPER_PERMISSIONS,
         bureau_permissions={},
     )
     rb_admin = Principal(
@@ -164,6 +167,7 @@ class FakeDatabase:
         self.configured = True
         self.connected = True
         self.last_claims: dict[str, Any] = {}
+        self.last_role: str | None = None
 
     async def open(self) -> None:
         return None
@@ -175,8 +179,9 @@ class FakeDatabase:
         return True
 
     @asynccontextmanager
-    async def session(self, claims: dict[str, Any] | None = None):
+    async def session(self, claims: dict[str, Any] | None = None, *, role: str | None = None):
         self.last_claims = dict(claims or {})
+        self.last_role = role
         yield object()
 
 

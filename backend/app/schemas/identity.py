@@ -67,7 +67,20 @@ class ActiveBureauResponse(ApiModel):
     permissions: list[str]
 
 
+class DemoChannelInfo(ApiModel):
+    code: str
+    name: str
+    channel_type: str
+    portal: str
+    is_simulated: bool = True
+
+
 class DemoInfo(ApiModel):
     demo_mode: bool
     notice: str
-    phase: str = "Phase 1 - Identity and authorization"
+    phase: str = "Phase 2.1 - Simulated complaint intake"
+    demo_intake_enabled: bool = False
+    channels: list[DemoChannelInfo] = Field(default_factory=list)
+    simulation_notice_version: str | None = None
+    simulation_notice_en: str | None = None
+    simulation_notice_hi: str | None = None

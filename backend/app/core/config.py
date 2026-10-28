@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     demo_mode: bool = True
     demo_banner_text: str = "Illustrative Demo Data - simulated environment"
 
+    # --- Simulated intake (Phase 2.1) -----------------------------------
+    # The demo portals are public, but only this API may create submissions.
+    # The database function accepts no role except demo_intake_role.
+    demo_intake_enabled: bool = True
+    demo_intake_role: str = "one_desk_intake"
+    demo_intake_rate_limit: int = 10
+    demo_intake_rate_window_seconds: int = 60
+
     # --- Supabase Auth token verification -------------------------------
     supabase_url: str | None = None
     supabase_jwt_secret: str | None = None

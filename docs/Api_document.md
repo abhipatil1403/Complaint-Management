@@ -95,18 +95,35 @@ Use only illustrative values in demo seed data. Never imply a demo institution i
 
 ### **4.2 Submission**
 
+Index shape (`GET /submissions`):
+
 {  
   "id": "uuid",  
-  "intake\_channel": {"code": "DEMO\_PORTAL", "name": "Simulated Portal"},  
-  "external\_reference": "DEMO-SRC-00001",  
-  "received\_at": "2026-10-28T10:25:00Z",  
-  "original\_language": "en",  
-  "intake\_status": "awaiting\_duplicate\_review",  
-  "institution\_id": "uuid",  
+  "external\_reference": "SIM-AICTE\_SIM-20261029-3f9a1c2b4d5e",  
+  "source\_event\_id": null,  
+  "channel": {"code": "AICTE\_SIM", "name": "Simulated AICTE portal", "is\_simulated": true},  
+  "received\_at": "2026-10-29T04:55:00Z",  
+  "institution": null,  
+  "institution\_name\_as\_submitted": "Illustrative Institute of Technology",  
+  "subject": "Illustrative issue",  
+  "original\_language": "hi",  
+  "intake\_status": "awaiting\_institution\_verification",  
   "canonical\_case\_id": null  
 }
 
-Complaint text is returned only to authorized users and should be omitted from general list/index responses.
+`GET /submissions/{submission_id}` adds the preserved fields below. Complaint text is returned only to callers with the global `submission.view` capability and is omitted from every list response.
+
+{  
+  "original\_text": "पानी की आपूर्ति ठप है — original text",  
+  "content\_fingerprint": "sha256 hex",  
+  "source\_submitted\_at": "2026-10-29T04:55:00.000Z",  
+  "reference\_origin": "demo\_generated",  
+  "simulation\_notice\_version": "SIM-NOTICE-2026-10-29-v1",  
+  "consent\_acknowledged": true,  
+  "created\_at": "2026-10-29T04:55:01Z"  
+}
+
+`original_text` and `subject` are stored and returned verbatim. No translation, trimming or normalisation is applied by Phase 2.1.
 
 ### **4.3 Case index DTO (minimal visibility)**
 
@@ -174,43 +191,84 @@ Institution search filters: `q`, `region_id`, `verification_status`, `is_active`
 
 ### **5.3 Intake and submissions**
 
+Implemented in Phase 2.1:
+
 | Method | Path | Purpose | Permission |
 | ----- | ----- | ----- | ----- |
-| POST | `/demo/intake/{channel_code}/submissions` | Simulated public/demo submission intake | demo intake enabled |
-| GET | `/submissions` | Search/list submissions | `submission.view` |
-| GET | `/submissions/{submission_id}` | Authorized submission details | `submission.view` |
-| POST | `/submissions/{submission_id}/process` | Start/retry idempotent processing | `submission.process` |
-| POST | `/submissions/{submission_id}/associate-case` | Associate after authorized review | `submission.associate` |
-| POST | `/submissions/{submission_id}/create-case` | Create case after institution resolution and duplicate review | `case.create` |
+| POST | `/demo/intake/{channel_code}/submissions` | Record a simulated submission (public) | none; demo intake enabled |
+| GET | `/submissions` | List preserved submissions | global `submission.view` |
+| GET | `/submissions/{submission_id}` | Submission detail, including the original text | global `submission.view` |
 
-Example demo intake request:
+Not implemented in Phase 2.1 (planned for later phases): `POST /submissions/{id}/process`, `/associate-case`, `/create-case`.
+
+#### Public simulated submission
+
+`POST /demo/intake/AICTE_SIM/submissions` or `POST /demo/intake/CPGRAMS_SIM/submissions`.
+
+Optional header: `Idempotency-Key` (1–128 characters). Reuse the key for retries of the same content; use a new key for an intentionally separate submission.
 
 {  
-  "institution\_permanent\_id": "DEMO-PIC-0001",  
+  "institution\_permanent\_id": "DEMO-AICTE-0001",  
   "institution\_name\_as\_submitted": "Illustrative Institute of Technology",  
   "subject": "Illustrative issue",  
-  "description": "Synthetic text used for the demonstrator.",  
-  "language": "en",  
-  "category\_code": "FACILITIES",  
-  "submitter\_reference": "DEMO-SUBMITTER-001"  
+  "description": "पानी की आपूर्ति ठप है — original text",  
+  "language": "hi",  
+  "category\_code": null,  
+  "source\_event\_id": null,  
+  "source\_submitted\_at": "2026-10-29T10:25:00+05:30",  
+  "consent\_acknowledged": true  
 }
 
-Response `201`:
+Rules enforced by both FastAPI and PostgreSQL:
+
+* `institution_permanent_id` or `institution_name_as_submitted` is required.
+* `language` is `en` or `hi`; text is never translated or normalised.
+* `subject` ≤ 200 characters; `description` ≤ 20,000 characters; `Idempotency-Key` ≤ 128.
+* `source_submitted_at` must include a UTC offset and may not be more than five minutes in the future.
+* `consent_acknowledged` must be `true`.
+* Control characters are rejected; tabs and line breaks are preserved in the description.
+* An institution is resolved only by an exact, active, **verified** `aicte_permanent_id`. Unknown IDs and free-text names are left unresolved for a later verification phase.
+* No case, duplicate candidate, verification task, attachment or notification is created.
+
+Success `201` (new record) or `200` (idempotent replay):
 
 {  
+  "outcome": "created",  
+  "replayed": false,  
   "submission\_id": "uuid",  
-  "source\_reference": "DEMO-SRC-00001",  
-  "intake\_status": "received",  
-  "demo\_notice": "This is a simulated submission. It has not been sent to AICTE or CPGRAMS."  
+  "external\_reference": "SIM-AICTE\_SIM-20261029-3f9a1c2b4d5e",  
+  "intake\_status": "awaiting\_duplicate\_review",  
+  "received\_at": "2026-10-29T04:55:01Z",  
+  "institution\_resolved": true,  
+  "channel": {"code": "AICTE\_SIM", "name": "Simulated AICTE portal", "is\_simulated": true},  
+  "demo\_notice": "Simulation notice — this is not a real complaint portal. …",  
+  "simulation\_notice\_version": "SIM-NOTICE-2026-10-29-v1"  
 }
 
-Intake rules:
+Failure modes:
 
-* Accept an idempotency key for retries.  
-* Preserve every genuine source event.  
-* Do not create a canonical institution based only on unverified free-text name.  
-* Do not silently discard repeated submissions.  
-* Distinguish duplicate delivery of the same source event from a genuine new submission.
+| Status | Code | Meaning |
+| ----- | ----- | ----- |
+| 404 | `INTAKE_DISABLED` | `DEMO_MODE` or `DEMO_INTAKE_ENABLED` is off |
+| 404 | `INTAKE_CHANNEL_UNAVAILABLE` | Channel missing, inactive or not simulated |
+| 409 | `IDEMPOTENCY_CONFLICT` | Same key/source event with different content; no identifiers are returned |
+| 422 | `VALIDATION_ERROR` | Field-level validation failure; the submitted value is never echoed |
+| 429 | `RATE_LIMITED` | Per-client demo rate limit; `Retry-After` is provided |
+
+Idempotency: the canonical payload includes `payload_version`, channel, institution fields, `subject`, `original_text`, `original_language`, `category_code`, `source_event_id` and `source_submitted_at` normalised to UTC with millisecond precision. `sha256(payload::text)` is stored as `request_hash`; an identical replay returns the original submission and a changed payload returns `409`.
+
+#### Authorized reads
+
+`GET /submissions` query parameters: `limit` (1–100, default 25), `cursor`, `channel_code`, `intake_status`, `language` (`en`/`hi`), `q` (subject or reference search). Responses use the standard page envelope. `original_text` is never included.
+
+`GET /submissions/{submission_id}` returns the detail shape in §4.2. A caller without `submission.view` receives `403`, and PostgreSQL row-level security independently returns no row.
+
+Intake rules (Phase 2.1):
+
+* Every genuine submission is preserved; nothing is deleted or overwritten.
+* Duplicate delivery of the same source event is distinguished from a genuinely new submission.
+* Duplicate matching and merging are **not** performed, and never happen automatically.
+* One channel write path exists: the public API calls an insert-only `SECURITY DEFINER` function as the dedicated `one_desk_intake` role. Browser roles hold no `EXECUTE` and no write privilege on intake tables.
 
 ### **5.4 Cases, workflow, notes, and history**
 
@@ -339,7 +397,9 @@ Dashboard definitions must document date range, numerator/denominator, status sc
 | ----- | ----- | ----- | ----- |
 | GET | `/health/live` | Process liveness only | no sensitive data |
 | GET | `/health/ready` | Readiness and dependency status | internal/demo-safe |
-| GET | `/demo/info` | Return demo-mode notice and feature flags | public-safe |
+| GET | `/demo/info` | Demo flags, the two simulated channels, and the approved English/Hindi simulation notices | public-safe |
+
+`/demo/info` returns `demo_mode`, `notice`, `phase`, `demo_intake_enabled`, `channels[]` (code, name, channel_type, portal, is_simulated) and `simulation_notice_en` / `simulation_notice_hi` / `simulation_notice_version`.
 
 Health responses must not expose credentials, database URLs, internal hostnames, or stack traces.
 

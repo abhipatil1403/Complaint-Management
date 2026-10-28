@@ -159,6 +159,24 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
 }
 
 
+# --- Phase 2.1 intake capability -----------------------------------------
+# Kept separate from PHASE1_PERMISSIONS: Phase 1's catalogue is frozen, and the
+# intake capability is granted to Super Admin only, as an explicit grant.
+SUBMISSION_VIEW = "submission.view"
+
+PHASE2_PERMISSIONS: dict[str, dict[str, str]] = {
+    SUBMISSION_VIEW: {
+        "name": "View intake submissions",
+        "resource_type": "submission",
+        "action_type": "view",
+    },
+}
+
+PHASE2_ROLE_GRANTS: dict[str, tuple[str, ...]] = {
+    SUPER_ADMIN: (SUBMISSION_VIEW,),
+}
+
+
 def to_db_code(api_code: str) -> str:
     return api_code.strip().upper()
 

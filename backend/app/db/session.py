@@ -21,7 +21,7 @@ from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-_SWITCHABLE_ROLES = {"authenticated", "anon"}
+_SWITCHABLE_ROLES = {"authenticated", "anon", "one_desk_intake"}
 
 
 class DatabaseNotConfigured(RuntimeError):
@@ -89,17 +89,34 @@ class Database:
     # -- sessions --------------------------------------------------------
     @asynccontextmanager
     async def session(
-        self, claims: Mapping[str, Any] | None = None
+        self,
+        claims: Mapping[str, Any] | None = None,
+        *,
+        role: str | None = None,
     ) -> AsyncIterator[AsyncConnection]:
         """Yield a connection scoped to one transaction.
 
         ``claims`` must only contain data taken from a verified access token.
+
+        ``role`` switches to an explicit allowlisted role instead of the
+        default RLS role. The public intake path uses it to become
+        ``one_desk_intake``: that role holds EXECUTE on one insert-only
+        function and no table privilege at all. The owner role is never used to
+        serve a request.
         """
         pool = self._require_pool()
+        if role is not None and role not in _SWITCHABLE_ROLES:
+            raise DatabaseNotConfigured(
+                f"Refusing to switch to role {role!r}; allowed: {sorted(_SWITCHABLE_ROLES)}."
+            )
         async with pool.connection() as conn:
             async with conn.transaction():
                 if claims is not None:
                     await self._apply_caller_context(conn, claims)
+                if role is not None:
+                    # Role name comes from the allowlist above, never from
+                    # request data.
+                    await conn.execute(f"set local role {role}")
                 yield conn
 
     async def _apply_caller_context(

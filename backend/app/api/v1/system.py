@@ -7,7 +7,13 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from app.schemas.identity import DemoInfo
+from app.schemas.identity import DemoChannelInfo, DemoInfo
+from app.services.intake import (
+    DEMO_CHANNELS,
+    SIMULATION_NOTICE_EN,
+    SIMULATION_NOTICE_HI,
+    SIMULATION_NOTICE_VERSION,
+)
 
 logger = logging.getLogger("aicte_onedesk.system")
 router = APIRouter(tags=["system"])
@@ -32,4 +38,13 @@ async def health_ready(request: Request) -> JSONResponse:
 @router.get("/demo/info", response_model=DemoInfo, summary="Demo-mode notice and feature flags")
 async def demo_info(request: Request) -> DemoInfo:
     settings = request.app.state.settings
-    return DemoInfo(demo_mode=settings.demo_mode, notice=settings.demo_banner_text)
+    intake_enabled = bool(settings.demo_mode and settings.demo_intake_enabled)
+    return DemoInfo(
+        demo_mode=settings.demo_mode,
+        notice=settings.demo_banner_text,
+        demo_intake_enabled=intake_enabled,
+        channels=[DemoChannelInfo(**channel) for channel in DEMO_CHANNELS] if intake_enabled else [],
+        simulation_notice_version=SIMULATION_NOTICE_VERSION,
+        simulation_notice_en=SIMULATION_NOTICE_EN,
+        simulation_notice_hi=SIMULATION_NOTICE_HI,
+    )

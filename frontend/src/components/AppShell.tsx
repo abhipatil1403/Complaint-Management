@@ -8,6 +8,7 @@ export function AppShell() {
   const { me, has, signOut } = useAuth();
 
   const navigation = [
+    { to: "/intake", label: "Intake", visible: has("submission.view") },
     { to: "/institutions", label: "Institutions", visible: has("institution.view") },
     { to: "/bureaus", label: "Bureaus", visible: has("bureau.view") },
     { to: "/regions", label: "Regions", visible: has("region.view") },
@@ -16,6 +17,7 @@ export function AppShell() {
       label: "Administration",
       visible: has("user.view") || has("role.view"),
     },
+    { to: "/demo", label: "Demo portals", visible: true },
   ].filter((item) => item.visible);
 
   return (
@@ -28,7 +30,7 @@ export function AppShell() {
           </span>
           <span>
             <strong>AICTE OneDesk</strong>
-            <small>Complaint monitoring — Phase 1</small>
+            <small>Complaint monitoring — Phase 2.1</small>
           </span>
         </Link>
 
@@ -64,7 +66,7 @@ export function AppShell() {
 
       <footer className="app-footer">
         <span>Demonstrator only. Illustrative demo data; not an official AICTE service.</span>
-        <span>Phase 1 — identity, authorization and reference data.</span>
+        <span>Phase 2.1 — simulated intake and submission preservation.</span>
       </footer>
     </div>
   );

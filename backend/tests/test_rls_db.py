@@ -612,7 +612,12 @@ def test_anon_has_no_grants_on_any_public_table(conn) -> None:
 
 
 def test_authenticated_has_no_ddl_privileges_on_business_tables(conn) -> None:
-    """F10: no TRUNCATE/REFERENCES/TRIGGER anywhere in the public schema."""
+    """F10: no TRUNCATE/REFERENCES/TRIGGER anywhere in the public schema.
+
+    ``information_schema.role_table_grants`` does not expose PostgreSQL 17's
+    MAINTAIN privilege, so MAINTAIN is checked separately with
+    ``has_table_privilege`` below.
+    """
     rows = conn.execute(
         """
         select table_name, privilege_type
@@ -623,6 +628,16 @@ def test_authenticated_has_no_ddl_privileges_on_business_tables(conn) -> None:
         """
     ).fetchall()
     assert rows == []
+
+
+def test_authenticated_has_no_maintain_on_intake_tables(conn) -> None:
+    """Phase 2.1 removes PostgreSQL 17 MAINTAIN from the two intake tables."""
+    for table in ("submissions", "intake_channels"):
+        granted = conn.execute(
+            "select has_table_privilege(%s, %s, 'MAINTAIN') as granted",
+            ("authenticated", f"public.{table}"),
+        ).fetchone()["granted"]
+        assert granted is False, table
 
 
 def test_authenticated_cannot_write_the_permission_catalogue(conn, accounts) -> None:
@@ -991,3 +1006,385 @@ def test_authenticated_cannot_delete_role_assignments(conn, accounts) -> None:
         with pytest.raises(pg_errors.InsufficientPrivilege):
             conn.execute("delete from public.user_role_assignments where false")
         conn.execute("rollback to savepoint delete_probe")
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.1 simulated intake
+#
+# Every probe below runs in a transaction that is always rolled back, so the
+# preserved-submission guarantees are exercised without writing demo rows.
+# ---------------------------------------------------------------------------
+INTAKE_FUNCTION = (
+    "public.create_demo_submission(text, text, text, text, text, text, text, "
+    "text, text, timestamptz, boolean)"
+)
+
+# A past instant (the function refuses timestamps more than five minutes ahead).
+INTAKE_ARGS = (
+    "AICTE_SIM",
+    "DEMO-UNKNOWN-9999",
+    "Illustrative Institute",
+    "Water supply disruption",
+    "पानी की आपूर्ति ठप है — original text 123",
+    "hi",
+    None,
+    "evt-rls-0001",
+    "idem-rls-0001",
+    "2026-10-20T10:25:00+05:30",
+    True,
+)
+
+
+def _call_intake(conn: psycopg.Connection, args: tuple = INTAKE_ARGS) -> dict:
+    """Invoke the write path exactly as the API does: as one_desk_intake."""
+    conn.execute("reset role")
+    conn.execute("set local role one_desk_intake")
+    try:
+        row = conn.execute(
+            "select public.create_demo_submission("
+            + ", ".join(["%s"] * 11)
+            + ") as result",
+            args,
+        ).fetchone()
+    finally:
+        conn.execute("reset role")
+    return row["result"]
+
+
+def _call_intake_as(conn: psycopg.Connection, role: str) -> dict:
+    conn.execute("reset role")
+    conn.execute(f"set local role {role}")
+    try:
+        row = conn.execute(
+            "select public.create_demo_submission("
+            + ", ".join(["%s"] * 11)
+            + ") as result",
+            INTAKE_ARGS,
+        ).fetchone()
+    finally:
+        conn.execute("reset role")
+    return row["result"]
+
+
+def _intake_count(conn: psycopg.Connection) -> int:
+    conn.execute("reset role")
+    return conn.execute("select count(*) as total from public.submissions").fetchone()["total"]
+
+
+def test_intake_function_is_a_pinned_definer_with_an_allowlist(conn) -> None:
+    row = conn.execute(
+        """
+        select p.prosecdef,
+               p.proconfig,
+               pg_get_userbyid(p.proowner) as owner,
+               pg_get_functiondef(p.oid) as definition
+          from pg_proc p
+          join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname = 'create_demo_submission'
+        """
+    ).fetchone()
+    assert row is not None
+    assert row["prosecdef"] is True
+    assert row["owner"] == "postgres"
+    config = row["proconfig"] or []
+    assert 'search_path=""' in config
+    assert any(item.startswith("statement_timeout=") for item in config)
+    assert "current_setting('role', true)" in row["definition"]
+    assert "'one_desk_intake'" in row["definition"]
+
+    role = conn.execute(
+        "select rolcanlogin, rolbypassrls, rolsuper from pg_roles"
+        " where rolname = 'one_desk_intake'"
+    ).fetchone()
+    assert role is not None
+    assert role["rolcanlogin"] is False
+    assert role["rolbypassrls"] is False
+    assert role["rolsuper"] is False
+
+
+def test_intake_execute_is_granted_only_to_the_intake_role(conn) -> None:
+    for role, expected in (
+        ("anon", False),
+        ("authenticated", False),
+        ("service_role", False),
+        ("one_desk_intake", True),
+    ):
+        actual = conn.execute(
+            "select has_function_privilege(%s, %s, 'EXECUTE') as granted",
+            (role, INTAKE_FUNCTION),
+        ).fetchone()["granted"]
+        assert actual is expected, role
+
+
+def test_intake_role_holds_no_table_privilege(conn) -> None:
+    grants = conn.execute(
+        """
+        select table_name, privilege_type
+          from information_schema.role_table_grants
+         where table_schema = 'public' and grantee = 'one_desk_intake'
+        """
+    ).fetchall()
+    assert grants == []
+
+    with conn.transaction(force_rollback=True):
+        conn.execute("set local role one_desk_intake")
+        for statement in (
+            "select id from public.submissions limit 1",
+            "select id from public.intake_channels limit 1",
+            "update public.submissions set subject = 'x' where false",
+            "delete from public.submissions where false",
+        ):
+            conn.execute("savepoint intake_read")
+            with pytest.raises(pg_errors.InsufficientPrivilege):
+                conn.execute(statement)
+            conn.execute("rollback to savepoint intake_read")
+
+
+def test_authenticated_cannot_write_intake_tables(conn, accounts) -> None:
+    """Preservation: no Data API path can rewrite or delete a submission."""
+    me = accounts["me"]
+    with conn.transaction(force_rollback=True):
+        _act_as(conn, me["id"])
+        for statement in (
+            "insert into public.submissions (intake_channel_id, subject, original_text)"
+            " select id, 'x', 'y' from public.intake_channels limit 1",
+            "update public.submissions set subject = 'overwritten' where false",
+            "delete from public.submissions where false",
+            "update public.intake_channels set is_active = false where false",
+            "delete from public.intake_channels where false",
+        ):
+            conn.execute("savepoint intake_write")
+            with pytest.raises(pg_errors.InsufficientPrivilege):
+                conn.execute(statement)
+            conn.execute("rollback to savepoint intake_write")
+
+
+def test_public_intake_preserves_the_original_submission(conn) -> None:
+    with conn.transaction(force_rollback=True):
+        cases_before = conn.execute("select count(*) as total from public.cases").fetchone()["total"]
+        before = _intake_count(conn)
+
+        result = _call_intake(conn)
+        assert result["outcome"] == "created", result
+        assert result["is_simulated"] is True
+        assert result["intake_status"] == "awaiting_institution_verification"
+        assert result["institution_resolved"] is False
+        assert result["external_reference"].startswith("SIM-AICTE_SIM-")
+
+        row = conn.execute(
+            "select * from public.submissions where id = %s", (result["submission_id"],)
+        ).fetchone()
+        assert row["original_text"] == INTAKE_ARGS[4]
+        assert row["subject"] == INTAKE_ARGS[3]
+        assert row["original_language"] == "hi"
+        assert row["normalized_text"] is None
+        assert row["normalization_version"] is None
+        assert row["submitter_reference"] is None
+        assert row["canonical_case_id"] is None
+        assert row["institution_id"] is None
+        assert row["source_metadata"]["demo"] is True
+        assert row["source_metadata"]["reference_origin"] == "demo_generated"
+        assert row["source_metadata"]["source_submitted_at"] == "2026-10-20T04:55:00.000Z"
+
+        # A submission never creates a case, a duplicate candidate or a task.
+        assert _intake_count(conn) == before + 1
+        cases_after = conn.execute("select count(*) as total from public.cases").fetchone()["total"]
+        assert cases_after == cases_before
+        for table in (
+            "duplicate_candidates",
+            "institution_verification_tasks",
+            "attachments",
+        ):
+            total = conn.execute(f'select count(*) as total from public."{table}"').fetchone()["total"]
+            assert total == 0, table
+
+
+def test_public_intake_replay_and_conflict_do_not_duplicate(conn) -> None:
+    with conn.transaction(force_rollback=True):
+        created = _call_intake(conn)
+        assert created["outcome"] == "created"
+
+        replay = _call_intake(conn)
+        assert replay["outcome"] == "replay"
+        assert replay["submission_id"] == created["submission_id"]
+
+        changed_time = list(INTAKE_ARGS)
+        changed_time[9] = "2026-10-20T10:25:01+05:30"
+        conflict = _call_intake(conn, tuple(changed_time))
+        assert conflict["outcome"] == "conflict"
+        assert conflict["code"] == "IDEMPOTENCY_PAYLOAD_MISMATCH"
+        assert "submission_id" not in conflict
+
+        # A new key with identical content is a genuinely separate submission.
+        second = list(INTAKE_ARGS)
+        second[7] = "evt-rls-0002"
+        second[8] = "idem-rls-0002"
+        assert _call_intake(conn, tuple(second))["outcome"] == "created"
+        assert _intake_count(conn) == 2
+
+
+def test_public_intake_validation_failures_create_nothing(conn) -> None:
+    with conn.transaction(force_rollback=True):
+        before = _intake_count(conn)
+        cases = (
+            ({"index": 10, "value": False}, "CONSENT_REQUIRED"),
+            ({"index": 5, "value": "fr"}, "UNSUPPORTED_LANGUAGE"),
+            ({"index": 3, "value": "   "}, "SUBJECT_REQUIRED"),
+            ({"index": 4, "value": "   "}, "TEXT_REQUIRED"),
+            ({"index": 1, "value": None, "clear_name": True}, "INSTITUTION_IDENTIFIER_REQUIRED"),
+            ({"index": 9, "value": "2099-01-01T00:00:00Z"}, "SOURCE_TIME_IN_FUTURE"),
+        )
+        for change, expected_code in cases:
+            bad = list(INTAKE_ARGS)
+            bad[change["index"]] = change["value"]
+            if change.get("clear_name"):
+                bad[2] = None
+            bad[7] = f"evt-rls-bad-{expected_code}"
+            bad[8] = f"idem-rls-bad-{expected_code}"
+            result = _call_intake(conn, tuple(bad))
+            assert result.get("code") == expected_code, result
+
+        unknown = list(INTAKE_ARGS)
+        unknown[0] = "NOPE_SIM"
+        assert _call_intake(conn, tuple(unknown))["outcome"] == "channel_unavailable"
+
+        assert _intake_count(conn) == before
+
+
+def test_caller_gate_refuses_other_roles_even_after_an_accidental_grant(conn) -> None:
+    """The allowlist is the last line of defence, not the grant alone."""
+    with conn.transaction(force_rollback=True):
+        before = _intake_count(conn)
+        conn.execute(f"grant execute on function {INTAKE_FUNCTION} to authenticated")
+        granted = conn.execute(
+            "select has_function_privilege('authenticated', %s, 'EXECUTE') as granted",
+            (INTAKE_FUNCTION,),
+        ).fetchone()["granted"]
+        assert granted is True
+
+        result = _call_intake_as(conn, "authenticated")
+        assert result["outcome"] == "channel_unavailable"
+        assert result["code"] == "INTAKE_CHANNEL_UNAVAILABLE"
+        assert _intake_count(conn) == before
+
+
+def test_owner_session_without_set_role_is_refused(conn) -> None:
+    with conn.transaction(force_rollback=True):
+        before = _intake_count(conn)
+        conn.execute("reset role")
+        owned = conn.execute(
+            "select public.create_demo_submission("
+            + ", ".join(["%s"] * 11)
+            + ") as result",
+            INTAKE_ARGS,
+        ).fetchone()["result"]
+        assert owned["outcome"] == "channel_unavailable"
+        assert _intake_count(conn) == before
+
+
+def test_submission_bodies_require_the_submission_view_capability(conn, accounts) -> None:
+    me = accounts["me"]
+    super_admin = accounts["super"]
+    with conn.transaction(force_rollback=True):
+        created = _call_intake(conn)
+        assert created["outcome"] == "created"
+
+        # An ordinary active user has no global SUBMISSION.VIEW grant.
+        _act_as(conn, me["id"])
+        assert conn.execute("select id from public.submissions").fetchall() == []
+
+        if super_admin is None:
+            pytest.skip("No active Super Admin account found.")
+        _act_as(conn, super_admin["id"])
+        visible = {
+            row["id"] for row in conn.execute("select id from public.submissions").fetchall()
+        }
+        assert UUID(created["submission_id"]) in visible
+
+        # Channel reference data is visible to any active application user.
+        assert len(conn.execute("select id from public.intake_channels").fetchall()) == 2
+
+
+def test_anonymous_callers_cannot_read_or_create(conn) -> None:
+    with conn.transaction(force_rollback=True):
+        _act_as(conn, None, role="anon")
+        conn.execute("savepoint anon_read")
+        with pytest.raises(pg_errors.InsufficientPrivilege):
+            conn.execute("select id from public.submissions").fetchall()
+        conn.execute("rollback to savepoint anon_read")
+
+        conn.execute("savepoint anon_call")
+        with pytest.raises(pg_errors.InsufficientPrivilege):
+            conn.execute(
+                "select public.create_demo_submission("
+                + ", ".join(["%s"] * 11)
+                + ")",
+                INTAKE_ARGS,
+            )
+        conn.execute("rollback to savepoint anon_call")
+
+
+def test_concurrent_intake_calls_serialise_on_the_same_source_identity() -> None:
+    """Two connections, one key: the second call waits and cannot double-insert.
+
+    Both transactions are rolled back, so nothing is preserved by this test.
+    The replay/conflict semantics on a committed row are covered by
+    ``test_public_intake_replay_and_conflict_do_not_duplicate``.
+    """
+    assert DATABASE_URL
+    args = list(INTAKE_ARGS)
+    args[7] = "evt-rls-concurrent"
+    args[8] = "idem-rls-concurrent"
+    args = tuple(args)
+
+    session_a: psycopg.Connection | None = None
+    session_b: psycopg.Connection | None = None
+    outcome: dict[str, dict | str | None] = {"result": None}
+    try:
+        session_a = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
+        _call_intake(session_a, args)
+
+        session_b = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False)
+        session_b.execute("set local role one_desk_intake")
+
+        def call_from_b() -> None:
+            try:
+                row = session_b.execute(
+                    "select public.create_demo_submission("
+                    + ", ".join(["%s"] * 11)
+                    + ") as result",
+                    args,
+                ).fetchone()
+                outcome["result"] = row["result"]
+                session_b.rollback()
+            except psycopg.Error as exc:  # pragma: no cover - a failure path
+                outcome["result"] = type(exc).__name__
+                session_b.rollback()
+
+        worker = threading.Thread(target=call_from_b, daemon=True)
+        worker.start()
+        time.sleep(0.75)
+        assert worker.is_alive(), "the second call did not wait for the first transaction"
+
+        # Rolling the first call back releases the advisory lock. The second
+        # call now sees no row, so it creates one exactly once.
+        session_a.rollback()
+        worker.join(timeout=30)
+        assert not worker.is_alive()
+        assert isinstance(outcome["result"], dict)
+        assert outcome["result"]["outcome"] == "created"
+    finally:
+        for session in (session_a, session_b):
+            if session is not None and not session.closed:
+                try:
+                    session.rollback()
+                finally:
+                    session.close()
+
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True) as cleanup:
+        persisted = cleanup.execute(
+            "select count(*) as total from public.submissions"
+            " where idempotency_key = 'idem-rls-concurrent'"
+        ).fetchone()["total"]
+    assert persisted == 0
+

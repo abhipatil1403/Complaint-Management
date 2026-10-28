@@ -25,6 +25,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import ApiError, error_response
 from app.core.security import TokenVerifier
 from app.db.session import Database, DatabaseNotConfigured
+from app.services.intake import DemoIntakeService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,8 +67,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title=settings.app_name,
         version="0.1.0",
         description=(
-            "AICTE OneDesk - Phase 1 identity, authorization and reference data. "
-            "Demonstrator only; no real AICTE or CPGRAMS submission occurs."
+            "AICTE OneDesk - Phase 2.1 simulates complaint intake from the AICTE and "
+            "CPGRAMS portals. Nothing entered here is sent to AICTE, CPGRAMS or any "
+            "government office, and the demo portals are not real complaint channels."
         ),
         docs_url="/docs" if settings.app_env != "production" else None,
         redoc_url=None,
@@ -84,6 +86,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.token_verifier = TokenVerifier(settings)
     app.state.identity_service = IdentityService()
+    app.state.intake_service = DemoIntakeService(settings)
 
     if settings.cors_origin_list:
         app.add_middleware(
@@ -91,8 +94,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_origins=settings.cors_origin_list,
             allow_credentials=False,
             allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
-            allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Active-Bureau"],
-            expose_headers=["X-Request-ID"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "X-Request-ID",
+                "X-Active-Bureau",
+                "Idempotency-Key",
+            ],
+            expose_headers=["X-Request-ID", "Retry-After"],
         )
 
     @app.middleware("http")
@@ -105,7 +114,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # -- error handling --------------------------------------------------
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
-        return error_response(request, exc.status_code, exc.code, exc.message, exc.details)
+        return error_response(
+            request,
+            exc.status_code,
+            exc.code,
+            exc.message,
+            exc.details,
+            headers=exc.headers or None,
+        )
 
     @app.exception_handler(DatabaseNotConfigured)
     async def handle_db_missing(request: Request, exc: DatabaseNotConfigured) -> JSONResponse:
@@ -204,7 +220,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "bearerFormat": "JWT",
             "description": "Supabase Auth access token.",
         }
-        public_paths = {"/api/v1/health/live", "/api/v1/health/ready", "/api/v1/demo/info"}
+        public_paths = {
+            "/api/v1/health/live",
+            "/api/v1/health/ready",
+            "/api/v1/demo/info",
+            "/api/v1/demo/intake/{channel_code}/submissions",
+        }
         for path, operations in schema.get("paths", {}).items():
             if path in public_paths:
                 continue
