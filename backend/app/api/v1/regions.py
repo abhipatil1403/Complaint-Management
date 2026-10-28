@@ -9,7 +9,11 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from app.api.pagination import decode_cursor, page_response, validate_limit
 from app.api.v1.serializers import region_payload
 from app.auth import permissions as perms
-from app.auth.dependencies import RequestContext, require_permission
+from app.auth.dependencies import (
+    RequestContext,
+    require_global_permission,
+    require_permission,
+)
 from app.core.errors import ApiError
 from app.repositories import reference as repo
 from app.schemas.reference import RegionCreate, RegionOut, RegionUpdate
@@ -47,7 +51,7 @@ async def list_regions(
 )
 async def create_region(
     payload: RegionCreate,
-    ctx: RequestContext = Depends(require_permission(perms.REGION_MANAGE)),
+    ctx: RequestContext = Depends(require_global_permission(perms.REGION_MANAGE)),
 ) -> RegionOut:
     row = await repo.create_region(
         ctx.conn,
@@ -63,7 +67,7 @@ async def create_region(
 async def update_region(
     region_id: UUID,
     payload: RegionUpdate,
-    ctx: RequestContext = Depends(require_permission(perms.REGION_MANAGE)),
+    ctx: RequestContext = Depends(require_global_permission(perms.REGION_MANAGE)),
 ) -> RegionOut:
     values = payload.model_dump(exclude_unset=True)
     row = await repo.update_region(ctx.conn, region_id, values)

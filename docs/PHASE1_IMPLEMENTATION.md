@@ -153,7 +153,7 @@ This catalogue needs formal product sign-off before Phase 2 adds case capabiliti
 
 ## 8. PostgreSQL RLS and grants
 
-Migration: `supabase/migrations/0001_phase1_identity_rls.sql` (single transaction, additive only).
+Migration: `supabase/migrations/0001_phase1_identity_rls.sql` (single transaction, additive only), followed by `supabase/migrations/0002_phase1_security_closure.sql` (Phase 1 security closure, applied 28 October 2026).
 
 ### Helper functions
 
@@ -188,11 +188,52 @@ All helpers are `SECURITY DEFINER` where they read identity tables, with `search
 
 All ten tables had RLS enabled already but **zero policies**. The migration adds policies and least-privilege grants:
 
-- `anon` loses all table and helper access.
-- `authenticated` receives only `select/insert/update` (plus `delete` on `role_permissions` for catalogue maintenance). There is no `delete` grant on business/reference tables, so deactivation remains the only removal path.
+- `anon` holds **zero** table grants in `public` and no helper execute (F10).
+- `authenticated` receives only `select/insert/update` on the ten Phase 1 tables; there is no `delete` grant on `users`, `roles`, `permissions`, `user_role_assignments`, `bureaus`, `bureau_memberships`, `regions`, `institutions` or `institution_aliases`, so deactivation/revocation remains the removal path. `role_permissions` is `SELECT`-only through the Data API (F12).
+- `authenticated` holds no `TRUNCATE`, `REFERENCES` or `TRIGGER` privilege on any public table.
+- The **seven non-Phase-1 tables** (`cases`, `case_relationships`, `complaint_categories`, `duplicate_candidates`, `institution_verification_tasks`, `intake_channels`, `submissions`) keep the baseline `SELECT/INSERT/UPDATE/DELETE/MAINTAIN` grant for `authenticated`. They have RLS enabled with no policies, so every row is denied (fail-closed), and they are out of scope until Phase 2 adds policies. `DELETE`/`MAINTAIN` there are tracked as a Phase 2 hardening item, not an F10 regression: F10 covered `anon` and the `TRUNCATE`/`REFERENCES`/`TRIGGER` privileges only.
 - There is deliberately **no self-update policy on `users`**. Profile administration is a global `USER.MANAGE` capability; without this restriction a signed-in user could write `is_super_admin` or `account_status` through the exposed PostgREST API. No self-service profile-edit endpoint exists in Phase 1, so no product behaviour is lost.
 - `USER.VIEW` / `USER.MANAGE` checks in policies use `has_global_permission`, matching the API's `require_global_permission`; a bureau-scoped grant can never read the user directory.
 - RLS is not disabled and no table ownership is changed.
+
+### Assignment validation (F14)
+
+`validate_user_role_assignment()` is a `SECURITY DEFINER` trigger with
+`search_path = ''`, so its `FOR SHARE` reads see the real `roles`, `users`,
+`bureaus` and `bureau_memberships` rows instead of being filtered by the
+caller's UPDATE policies. Because a `BEFORE` trigger runs before the RLS
+`WITH CHECK`, the function gates the caller **before any lookup**:
+
+- `authenticated`, `anon`, `authenticator` and `RESET ROLE` sessions must hold the
+  global `USER.MANAGE` capability, otherwise `42501`;
+- `service_role` (secret-key holder) and privileged operator sessions
+  (superuser/BYPASSRLS, no role switched) are trusted.
+
+The gate deliberately does **not** use `auth_uid() IS NULL`: `request.jwt.claims`
+is client-settable, so that test is not evidence of a trusted caller.
+
+### Last-administrator guard (F12)
+
+`assert_global_administrator_remains()` is `SECURITY DEFINER` with
+`search_path = ''`, takes
+`pg_advisory_xact_lock(hashtext('aicte_onedesk.last_global_administrator'))`,
+and refuses a change that leaves no **permanent** administrator — an active user
+with an active, non-expiring, global assignment to an active global role that
+grants an active `USER.MANAGE`. Because one permanent holder is required, any
+expiry (past or future) on the last administrator is rejected at write time.
+
+| Table | Event | Guarded change |
+| --- | --- | --- |
+| `user_role_assignments` | UPDATE | revoked, re-scoped to a bureau, or given any expiry |
+| `user_role_assignments` | DELETE | removal |
+| `users` | UPDATE | active → non-active |
+| `roles` | UPDATE | `is_active` or `scope_type` changed |
+| `permissions` | UPDATE | `is_active` or `code` changed |
+| `role_permissions` | UPDATE | `role_id` or `permission_id` changed |
+| `role_permissions` | DELETE | grant removal |
+
+The guard has no operator bypass: add a replacement administrator first. It
+raises `P0001`, which the API maps to `422 RULE_VIOLATION`.
 
 ---
 
@@ -207,21 +248,21 @@ All routes are under `/api/v1`. Errors use `{"error": {"code", "message", "detai
 | GET | `/me/permissions` | authenticated |
 | POST | `/me/active-bureau` | authenticated, active membership |
 | GET | `/regions` | `region.view` |
-| POST | `/regions` | `region.manage` |
-| PATCH | `/regions/{id}` | `region.manage` |
+| POST | `/regions` | global `region.manage` |
+| PATCH | `/regions/{id}` | global `region.manage` |
 | GET | `/institutions` | `institution.view` |
 | GET | `/institutions/{id}` | `institution.view` |
-| POST | `/institutions` | `institution.manage` |
-| PATCH | `/institutions/{id}` | `institution.manage` |
+| POST | `/institutions` | global `institution.manage` |
+| PATCH | `/institutions/{id}` | global `institution.manage` |
 | GET | `/institution-aliases` | `institution.alias.view` |
-| POST | `/institutions/{id}/aliases` | `institution.alias.manage` |
+| POST | `/institutions/{id}/aliases` | global `institution.alias.manage` |
 | GET | `/bureaus` | `bureau.view` |
 | GET | `/bureaus/{id}` | `bureau.view` |
-| POST | `/bureaus` | `bureau.manage` |
-| PATCH | `/bureaus/{id}` | `bureau.manage` |
+| POST | `/bureaus` | global `bureau.manage` |
+| PATCH | `/bureaus/{id}` | global `bureau.manage` |
 | GET | `/bureaus/{id}/members` | `bureau.members.view` in that bureau |
-| POST | `/bureau-memberships` | `bureau.members.manage` in that bureau |
-| POST | `/bureau-memberships/{id}/end` | `bureau.members.manage` in that bureau |
+| POST | `/bureau-memberships` | global `bureau.members.manage` |
+| POST | `/bureau-memberships/{id}/end` | global `bureau.members.manage` |
 | GET | `/users`, `/users/{id}` | global `user.view` |
 | PATCH | `/users/{id}` | global `user.manage` |
 | POST | `/users/{id}/account-status` | global `user.manage` |
@@ -231,8 +272,14 @@ All routes are under `/api/v1`. Errors use `{"error": {"code", "message", "detai
 
 Additional safeguards:
 
+- The nine write endpoints for reference data and bureau memberships
+  (`POST/PATCH /regions`, `POST/PATCH /bureaus`, `POST /bureau-memberships`,
+  `POST /bureau-memberships/{id}/end`, `POST/PATCH /institutions`,
+  `POST /institutions/{id}/aliases`) use `require_global_permission`, matching the
+  RLS policy that guards the write. A caller without the capability receives
+  `403 GLOBAL_CAPABILITY_REQUIRED`. Read endpoints keep their context-aware rules.
 - Role grants require an active target user; bureau roles require an active membership of that bureau; global roles reject a `bureau_id`.
-- The last active Super Admin cannot revoke their own global role.
+- The last permanent administrator cannot revoke or expire their own global role, deactivate their account, disable the role or `USER.MANAGE`, or remove the grant — enforced in PostgreSQL as well as the API.
 - An administrator cannot deactivate or suspend their own account.
 - Institution verification requires an AICTE Permanent ID and a non-blank verification source, and only these transitions are accepted: `pending → verified`, `pending → rejected`, `verified → verified`, `rejected → rejected`.
 - Aliases with non-manual provenance require a source reference.
@@ -290,6 +337,19 @@ The browser treats the API's permission list as display state only.
 - No `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE` or column additions.
 - Wrapped in `BEGIN … COMMIT`.
 
+### 0002 — Phase 1 security closure (applied 28 October 2026)
+
+`supabase/migrations/0002_phase1_security_closure.sql`
+
+- `REVOKE ALL … FROM anon` on the 7 non-Phase-1 business tables.
+- `REVOKE TRUNCATE, REFERENCES, TRIGGER … FROM authenticated` on those tables.
+- `REVOKE INSERT, UPDATE, DELETE ON role_permissions FROM authenticated`.
+- `validate_user_role_assignment()` replaced with the `SECURITY DEFINER` +
+  session-trust-gated version (F14).
+- New `assert_global_administrator_remains()` function and 7 triggers (F12).
+- No `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE` or column addition; no row
+  changed. Verified: 32 tables, identical row counts.
+
 ### Seed
 
 `supabase/seed/phase1_identity_seed.sql` (idempotent, illustrative):
@@ -310,9 +370,12 @@ The seed ends with count assertions so an incomplete catalogue fails loudly. Ins
 
 `scripts/seed_demo_users.py` creates Auth users through the Supabase admin API, then upserts profiles, memberships and role grants. It refuses to run unless `ALLOW_DEMO_SEED=true` and `DEMO_PASSWORD` is at least 12 characters. It is idempotent.
 
-### Not executed in this environment
+### Applied in this environment
 
-The migration and seed were **not applied to a live project** because no database or Supabase credentials were supplied. No destructive SQL was executed. See §14.
+`0001`, the reference seed, the seven demo identities and `0002` were applied to
+the linked Supabase project on 28 October 2026 with `psql -v ON_ERROR_STOP=1`.
+No destructive SQL was executed. Results are in §12 and
+`docs/PHASE1_VERIFICATION.md` §3.
 
 ---
 
@@ -322,9 +385,7 @@ The migration and seed were **not applied to a live project** because no databas
 
 Command: `python -m pytest -o addopts= -q` from `backend/`
 
-Result: **119 passed, 14 skipped, 13 warnings in 3.79s**
-
-The 14 skips are the live RLS suite (`tests/test_rls_db.py`), which requires `DATABASE_URL`. The warnings are `InsecureKeyLengthWarning` from short HMAC keys generated inside the security tests; they are test fixtures, not deployed secrets.
+Result (28 October 2026, live database configured): **148 passed, 0 skipped, 13 warnings**. The 29 live RLS tests run against the linked Supabase project; the 13 warnings are `InsecureKeyLengthWarning` from short HMAC keys generated inside the security tests (fixtures, not deployed secrets).
 
 Coverage areas:
 
@@ -333,7 +394,7 @@ Coverage areas:
 - `test_endpoints.py` — route contracts, validation, state transitions, self-deactivation and last-Super-Admin guards.
 - `test_pagination.py` — cursor encoding/limits.
 - `test_seed_consistency.py` — permission/role catalogue parity between Python and SQL seed.
-- `test_rls_db.py` — live database assertions (skipped locally): anon denial, self-only profile and role visibility, helper parity with the caller's grants, bureau grants requiring their own active context and not leaking into another bureau, users unable to self-escalate privileged profile columns or edit another profile, ordinary users unable to write reference data or grant roles, Super Admin reference management and profile visibility. Every test uses `force_rollback=True`.
+- `test_rls_db.py` — live database assertions (29 tests): anon denial and zero grants, self-only profile and role visibility, helper parity with the caller's grants, bureau grants requiring their own active context and not leaking into another bureau, users unable to self-escalate privileged profile columns or edit another profile, ordinary users unable to write reference data, grant roles or reach the definer trigger with cleared claims, the last-administrator guard (revoke, future expiry, account/role/permission deactivation, grant deletion, expiring twin, negative control, two-session concurrency), catalogue writes denied, and the 32-table preservation check. Every non-concurrency test uses `force_rollback=True`; the concurrency test commits, then cleans up and re-verifies the administrator count.
 
 ### Frontend
 

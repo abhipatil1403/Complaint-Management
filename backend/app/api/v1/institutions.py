@@ -11,7 +11,11 @@ from fastapi import APIRouter, Depends, Query, status
 from app.api.pagination import decode_cursor, page_response, validate_limit
 from app.api.v1.serializers import institution_detail, institution_summary
 from app.auth import permissions as perms
-from app.auth.dependencies import RequestContext, get_request_context, require_permission
+from app.auth.dependencies import (
+    RequestContext,
+    require_global_permission,
+    require_permission,
+)
 from app.core.errors import ApiError
 from app.repositories import reference as repo
 from app.schemas.reference import (
@@ -91,7 +95,7 @@ async def get_institution(
 )
 async def create_institution(
     payload: InstitutionCreate,
-    ctx: RequestContext = Depends(require_permission(perms.INSTITUTION_MANAGE)),
+    ctx: RequestContext = Depends(require_global_permission(perms.INSTITUTION_MANAGE)),
 ) -> InstitutionDetail:
     if payload.region_id is not None and not await repo.region_exists(ctx.conn, payload.region_id):
         raise ApiError(422, "REFERENCE_ERROR", "The selected region does not exist or is inactive.")
@@ -136,7 +140,7 @@ async def create_institution(
 async def update_institution(
     institution_id: UUID,
     payload: InstitutionUpdate,
-    ctx: RequestContext = Depends(require_permission(perms.INSTITUTION_MANAGE)),
+    ctx: RequestContext = Depends(require_global_permission(perms.INSTITUTION_MANAGE)),
 ) -> InstitutionDetail:
     current = await repo.get_institution(ctx.conn, institution_id)
     if current is None:
@@ -226,7 +230,7 @@ async def list_aliases(
 async def create_alias(
     institution_id: UUID,
     payload: AliasCreate,
-    ctx: RequestContext = Depends(require_permission(perms.INSTITUTION_ALIAS_MANAGE)),
+    ctx: RequestContext = Depends(require_global_permission(perms.INSTITUTION_ALIAS_MANAGE)),
 ) -> AliasOut:
     if not await repo.institution_exists(ctx.conn, institution_id):
         raise ApiError(404, "NOT_FOUND", "Institution not found.")

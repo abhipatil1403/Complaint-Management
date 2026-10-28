@@ -153,15 +153,15 @@ All routes are under `/api/v1`; all except health/demo require a Supabase bearer
 | `GET /health/live`, `GET /health/ready`, `GET /demo/info` | public |
 | `GET /me`, `GET /me/permissions`, `POST /me/active-bureau` | authenticated |
 | `GET /regions` | `region.view` |
-| `POST /regions`, `PATCH /regions/{id}` | `region.manage` |
+| `POST /regions`, `PATCH /regions/{id}` | global `region.manage` |
 | `GET /institutions`, `GET /institutions/{id}` | `institution.view` |
-| `POST /institutions`, `PATCH /institutions/{id}` | `institution.manage` |
+| `POST /institutions`, `PATCH /institutions/{id}` | global `institution.manage` |
 | `GET /institution-aliases` | `institution.alias.view` |
-| `POST /institutions/{id}/aliases` | `institution.alias.manage` |
+| `POST /institutions/{id}/aliases` | global `institution.alias.manage` |
 | `GET /bureaus`, `GET /bureaus/{id}` | `bureau.view` |
-| `POST /bureaus`, `PATCH /bureaus/{id}` | `bureau.manage` |
+| `POST /bureaus`, `PATCH /bureaus/{id}` | global `bureau.manage` |
 | `GET /bureaus/{id}/members` | `bureau.members.view` (bureau capability) |
-| `POST /bureau-memberships`, `POST /bureau-memberships/{id}/end` | `bureau.members.manage` (bureau capability) |
+| `POST /bureau-memberships`, `POST /bureau-memberships/{id}/end` | global `bureau.members.manage` |
 | `GET /users`, `GET /users/{id}` | global `user.view` |
 | `PATCH /users/{id}`, `POST /users/{id}/account-status` | global `user.manage` |
 | `GET /roles` | global `role.view` |
@@ -195,7 +195,9 @@ The RLS suite skips when no connection string is found, so a green local run doe
 - Supabase Auth tokens are verified for signature, issuer, audience and expiry; service-role tokens are rejected.
 - Every authenticated request runs as PostgreSQL `authenticated` with `request.jwt.claims` set, so RLS applies to the caller.
 - The API validates `X-Active-Bureau` as an active membership and publishes it as the `active_bureau_id` claim. PostgreSQL applies bureau-scoped grants only for that bureau.
-- Administration endpoints require a **global** capability; a bureau-scoped grant never enables user or role administration.
+- Administration endpoints require a **global** capability; a bureau-scoped grant never enables user or role administration. The nine reference and bureau-membership write endpoints return `403 GLOBAL_CAPABILITY_REQUIRED` for a caller without the global grant, matching the RLS policy.
+- The capability catalogue (`role_permissions`) is read-only through the Data API; `authenticated` holds `SELECT` only. A last-administrator guard in PostgreSQL refuses any change that would leave no active, non-expiring global `USER.MANAGE` holder.
+- `anon` holds no table privilege in `public`; `authenticated` holds no `TRUNCATE`/`REFERENCES`/`TRIGGER` privilege on any table.
 - `users.is_super_admin` is ignored for authorization. Super Admin is derived from a global `SUPER_ADMIN` role and is not a case-content bypass.
 - The frontend hides unavailable controls for usability only; it is not a security boundary.
 - Accounts and reference data are deactivated, never hard-deleted.
@@ -210,8 +212,8 @@ The RLS suite skips when no connection string is found, so a green local run doe
 
 ## Known limitations
 
-- Live database and RLS test execution require credentials that were not available during implementation; see the implementation report.
+- Live database and RLS tests require a connection string; when it is missing the RLS suite skips rather than fails. With credentials configured, the full backend suite is `148 passed, 0 skipped` (29 of them live RLS tests).
 - The formal role/action matrix and state machines are still marked **baseline** in the PRD and need sign-off.
-- There is no general audit table in the 32-table model. Role-grant and revocation events use attribution columns plus structured logs; they are not queryable as an audit trail.
+- There is no general audit table in the 32-table model. Grants record `assigned_by_user_id`, but revocations have no `revoked_by_user_id` column: revocation attribution is log-only and must not be presented as a durable audit trail. This carries the F8 identifier in `docs/PHASE1_VERIFICATION.md`.
 - Bureau Admin membership management is not delegated because the PRD does not define that delegation. It remains read-only for bureau administrators.
 - Phase 1 has no create-user endpoint. Identities are provisioned through Supabase Auth out of band, then linked to a profile.

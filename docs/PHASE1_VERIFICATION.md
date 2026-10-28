@@ -23,7 +23,7 @@ procedure, and the remaining blockers. Phase 2 work has not started.
 | `docs/PRD.md` §7.1–§7.3, §15.2, §30 | personas, baseline permission matrix, state-machine baseline, Phase 1 scope |
 | `docs/MASTER_DATABASE_DESIGN.md` / `docs/Master_Database.md` | intended logical model |
 | `docs/Database_plan.md` | 34–35 table design discrepancy |
-| `docs/CURRENT_SUPABASE_SCHEMA.sql` | physical 32-table source of truth |
+| `docs/CURRENT_SUPABASE_SCHEMA.sql` | physical 32-table source of truth (regenerated from the live project on 28 Oct 2026, after `0002`) |
 | `supabase/migrations/0001_phase1_identity_rls.sql` | migration under review |
 | `supabase/seed/phase1_identity_seed.sql` | reference/demo seed |
 | `backend/app/**` | API authorization, identity resolution, DB session, repositories |
@@ -108,26 +108,44 @@ Remaining security observations (not changed without approval):
 
 | ID | Observation | Recommendation |
 | --- | --- | --- |
-| F8 | `user_role_assignments` has no `revoked_by_user_id` column and there is no general audit table. Revocation attribution is log-only. | Approve an additive audit table or a `revoked_by_user_id` column in a later migration. Do not invent one now. |
+| F8 | `user_role_assignments` has no `revoked_by_user_id` column and there is no general audit table. Revocation attribution is log-only, and application logs are **not** an adequate audit trail (not transactional with the change, not queryable by the product, rotatable). | **UNRESOLVED.** Approve an additive audit table or a `revoked_by_user_id` column in a later migration. Do not invent one now, and do not claim durable attribution. |
 | F9 | `shares_bureau_with(uuid)` is defined but unused and does not check `bureaus.is_active`. | Keep as reserved Phase 2+ helper, or verify it before use. |
-| F10 | `anon` retains full `ALL` table grants on **7** tables outside Phase 1 (`cases`, `case_relationships`, `complaint_categories`, `duplicate_candidates`, `institution_verification_tasks`, `intake_channels`, `submissions`) plus the 3 reference tables this migration handles. RLS is enabled on all 32 tables and no policies exist, so access is denied by default; this is fail-closed but broader than necessary. | Revoke `anon` from all business tables in a dedicated Phase 2 hardening migration. |
-| F11 | Reference-write API routes use `require_permission` (context-aware) and bureau-membership writes use `require_bureau_capability`, while the DB policies require a **global** manage capability. The current catalogue and `test_bureau_scoped_roles_carry_no_administration_capability` prevent this from being reachable, but the layers should be made explicit. | Either switch these writes to `require_global_permission`, or document that the catalogue invariant is the guard. |
-| F12 | A global `ROLE.MANAGE` holder can edit `role_permissions` directly (no API route) and remove the `ROLE.MANAGE`/`USER.MANAGE` grants from the last Super Admin role, locking out administration. | Add a last-administrator guard or restrict direct Data API writes to `role_permissions`. |
 | F13 | `users.is_super_admin` is a dormant denormalised column. It is ignored by the API, but a future query could trust it. | Keep it ignored; document it; do not use it for authorization. |
-| F14 | The pre-existing `validate_user_role_assignment` trigger reads `users`, `roles`, `bureaus` and `bureau_memberships` with `FOR SHARE`, and PostgreSQL applies the UPDATE policy to a locking read. Inserts therefore depend on the caller also holding the *update* capability for those tables (`ROLE.MANAGE`, `BUREAU.MANAGE`, `USER.MANAGE`, `BUREAU.MEMBERS.*`), not just `USER.MANAGE`. The seeded `SUPER_ADMIN` holds all of them, so the API path works; a future role with only `USER.MANAGE` would see spurious "Role must exist and be active" errors. Unauthorized callers are still denied, but with the trigger message (`P0001`) instead of `42501`. | Before delegating user administration, either make the trigger `SECURITY DEFINER` with an empty `search_path`, or drop the `FOR SHARE` clauses. Requires a separately approved migration. |
+
+Closed by `0002_phase1_security_closure.sql` and the F11 endpoint change,
+applied and verified on 28 October 2026:
+
+| ID | Issue | Resolution | Verified by |
+| --- | --- | --- | --- |
+| F10 | `anon` retained full `ALL` grants on the 7 non-Phase-1 business tables; `authenticated` held `TRUNCATE`/`REFERENCES`/`TRIGGER` there and on the Phase 1 tables. | `REVOKE ALL … FROM anon` on the seven, and `REVOKE TRUNCATE, REFERENCES, TRIGGER … FROM authenticated`. `anon` now holds **zero** grants on all 32 public tables. | `test_anon_has_no_grants_on_any_public_table`, `test_authenticated_has_no_ddl_privileges_on_business_tables` |
+| F11 | Reference and bureau-membership writes checked a context-aware capability while the RLS policy required a **global** one. | Nine write endpoints now use `require_global_permission`; callers without the capability receive `403 GLOBAL_CAPABILITY_REQUIRED`. | `tests/test_authorization.py` (write matrix) |
+| F12 | A `ROLE.MANAGE` holder could delete `role_permissions` rows from the Data API and strip the last administrator's `USER.MANAGE` grant; the last administrator could also revoke or deactivate themselves. | `INSERT`/`UPDATE`/`DELETE` on `role_permissions` revoked from `authenticated`, plus a last-administrator guard (7 triggers) requiring one active, **non-expiring**, global `USER.MANAGE` holder. `P0001` → API `422 RULE_VIOLATION`. | 9 live tests, including the two-session concurrency test |
+| F14 | `validate_user_role_assignment` read with `FOR SHARE` as the invoker, so locking reads were filtered by the UPDATE policies and valid assignments failed for an administrator who lacked `ROLE.MANAGE`/`BUREAU.MANAGE`. The obvious fix (a definer body) would have exposed account probing, and the originally proposed `auth_uid() IS NULL` bypass was itself exploitable because `request.jwt.claims` is client-settable. | Function is `SECURITY DEFINER` with `search_path = ''`; the session-trust gate runs before any lookup and raises `42501` for `authenticated`/`anon`/`authenticator` sessions and for `RESET ROLE` sessions, while trusting `service_role` and privileged operator sessions. | `test_ordinary_user_cannot_grant_roles`, `test_cleared_claims_do_not_unlock_the_assignment_trigger` |
 
 ### 2.4 Grants and RLS coverage
 
 - RLS was already enabled on all 32 tables, but the 10 Phase 1 tables had **zero**
   policies. The migration supplies the missing policies.
-- `anon` is revoked from the 10 Phase 1 tables and all 9 helper functions.
-- `authenticated` receives only `select/insert/update` on the Phase 1 tables
-  (plus `delete` on `role_permissions` for catalogue maintenance). There is no
+- `anon` holds **zero** table grants in `public` and cannot execute any helper
+  (closed by F10).
+- `authenticated` receives `select/insert/update` on the Phase 1 tables; the
+  `delete` grant on `role_permissions` was removed when F12 closed. There is no
   `DELETE` grant on `users`, `roles`, `permissions`, `user_role_assignments`,
   `bureaus`, `bureau_memberships`, `regions`, `institutions` or
   `institution_aliases`; deactivation/revocation is the removal path.
+- `authenticated` holds no `TRUNCATE`, `REFERENCES` or `TRIGGER` privilege on any
+  public table (closed by F10).
 - All write policies use `has_global_permission`; bureau-scoped grants cannot
-  write reference or identity data.
+  write reference or identity data. The nine write endpoints now enforce the same
+  rule in FastAPI (F11).
+- The capability catalogue (`role_permissions`) is read-only through the Data API
+  and is protected by the last-administrator guard on the owner path (F12).
+- The **seven non-Phase-1 tables** still carry the baseline
+  `SELECT/INSERT/UPDATE/DELETE/MAINTAIN` grant for `authenticated`. RLS is enabled
+  and they have no policies, so every row is denied; this is fail-closed and
+  unchanged by the closure. `DELETE` and the PostgreSQL 17 `MAINTAIN` privilege
+  there were outside the approved F10 scope and stay as a Phase 2 hardening item
+  (review them when those tables receive policies).
 - No table ownership, RLS enablement or existing constraint is changed.
 - The migration does not add or remove application tables.
 
@@ -183,6 +201,30 @@ with `pytest.raises(InsufficientPrivilege)` or by asserting zero affected rows.
 | `test_super_admin_can_manage_reference_data` | `authenticated` | authorized reference write works |
 | `test_super_admin_can_read_every_profile` | `authenticated` | authorized directory read works |
 
+Added when F10/F12/F14 were closed (15 tests):
+
+| Test | Role under test | What it proves |
+| --- | --- | --- |
+| `test_anon_has_no_grants_on_any_public_table` | `anon` | zero grants across all 32 public tables (F10) |
+| `test_authenticated_has_no_ddl_privileges_on_business_tables` | `authenticated` | no `TRUNCATE`/`REFERENCES`/`TRIGGER` anywhere (F10) |
+| `test_authenticated_cannot_write_the_permission_catalogue` | `authenticated` | catalogue `INSERT`/`UPDATE`/`DELETE` denied (F12) |
+| `test_authenticated_cannot_delete_role_assignments` | `authenticated` | no Data API path hard-deletes an assignment (F12) |
+| `test_cleared_claims_do_not_unlock_the_assignment_trigger` | `authenticated` | clearing `request.jwt.claims` cannot skip the gate (F14) |
+| `test_last_administrator_cannot_be_revoked` | `authenticated` | self-revocation of the last admin refused (F12) |
+| `test_last_administrator_cannot_receive_a_future_expiry` | `authenticated` | a future expiry cannot create a delayed lockout (F12) |
+| `test_last_administrator_cannot_be_deactivated` | `authenticated` | account deactivation of the last admin refused (F12) |
+| `test_user_manage_permission_cannot_be_deactivated` | `authenticated` | `USER.MANAGE` deactivation refused (F12) |
+| `test_administrator_role_cannot_be_deactivated` | `authenticated` | role deactivation refused (F12) |
+| `test_last_administrator_grant_cannot_be_deleted` | owner path | `role_permissions` deletion refused (F12) |
+| `test_expiring_second_administrator_does_not_satisfy_the_invariant` | owner path | a future-expiring twin does not replace a permanent admin (F12) |
+| `test_revocation_allowed_when_second_permanent_administrator_exists` | owner path | negative control: a second permanent admin unblocks removal (F12) |
+| `test_concurrent_revocations_cannot_remove_both_administrators` | two sessions | advisory lock + fresh snapshot prevent a two-session lockout (F12) |
+| `test_public_schema_still_has_32_tables` | owner path | the closure adds and removes no table |
+
+`test_ordinary_user_cannot_grant_roles` was tightened rather than duplicated: it
+now expects the gate's deterministic `42501` and the capability message, instead
+of accepting `P0001`.
+
 The suite also discovers two ordinary active accounts and one active Super Admin
 from the live data, and skips with an explicit message if the seed is missing.
 It now excludes accounts that already hold global `USER.VIEW`/`USER.MANAGE` from
@@ -191,15 +233,15 @@ administrator.
 
 ### 3.3 Remaining test gaps
 
-- No live test for `role_permissions` mutation by a global `ROLE.MANAGE` holder.
-- No live test for expired or revoked assignments.
 - No live test for `bureau_memberships` insert/update by a delegated bureau role
-  (the current catalogue has no such role).
-- No live test for `anon` on the 7 non-Phase-1 tables that still hold `anon`
-  grants; they are fail-closed by missing policies, but a future policy change
-  should add explicit coverage.
+  (the current catalogue has no such role; delegation stays disabled).
+- No test for an assignment that is already expired or revoked at read time
+  (covered indirectly by the helper predicates).
 - No PostgREST-level test; the tests use the same PostgreSQL roles and GUCs that
-  PostgREST uses, which is the security-relevant layer.
+  PostgREST uses, which is the security-relevant layer. The F10/F12 tests do
+  verify the grants that PostgREST relies on.
+- No test for `service_role` sessions; that role is trusted by the F14 gate only
+  for secret-key holders and has no application path in Phase 1.
 
 ### 3.4 Results
 
@@ -211,34 +253,44 @@ python -m pytest -o addopts= -q
 
 The suite resolves its connection string from `TEST_DATABASE_URL`, then
 `DATABASE_URL`, then `DATABASE_URL` in `backend/.env` (the same file the API
-reads), so the 14 live tests run without a duplicate export.
+reads), so the live tests run without a duplicate export.
 
 | Stage | Result |
 | --- | --- |
 | Before credentials (unit suite only) | `119 passed, 14 skipped` |
 | Before the migration, with credentials | `1 passed, 2 failed, 11 skipped` — expected: the helpers did not exist and `authenticated` had no grant on `users`; the suite really was talking to the database |
 | Migration + seed applied, no identities | `3 passed, 11 skipped` — explicit skip messages for missing accounts |
-| Migration + seed + 7 demo identities | **`14 passed, 0 skipped`** |
-| Full suite after verification | **`133 passed, 0 skipped, 13 warnings`** |
+| `0001` + seed + 7 demo identities | `14 passed, 0 skipped` |
+| Full suite after that verification | `133 passed, 0 skipped, 13 warnings` |
+| **After `0002` + F11 + 15 new live tests** | **live RLS `29 passed, 0 skipped`; full suite `148 passed, 0 skipped, 13 warnings`** |
 
-The final run exercised every policy with real data: ordinary-user self-only
-visibility, bureau-context allow/deny, cross-bureau isolation, profile-update
-denial, reference-write denial, role-grant denial, and the authorised Super Admin
-read/write paths.
+The first live run of the new concurrency test failed in its own cleanup helper
+(a missing `row_factory` produced `TypeError` while reading the post-test
+administrator count). The helper was fixed and the test re-run: `1 passed`. The
+database was left with one permanent administrator and six assignments, matching
+the pre-test state; the full suite then passed end to end. No security check was
+weakened to make a test pass.
 
 ### 3.5 Post-apply object verification
 
-| Check | Expected | Actual |
+| Check | Expected | Actual (28 Oct 2026) |
 | --- | --- | --- |
-| `public` base tables | 32 | 32 |
+| `public` base tables | 32 | 32 (identical name set before and after `0002`) |
+| Row counts on all 32 tables | unchanged | unchanged (records preserved) |
 | Tables with RLS enabled | 32 | 32 |
 | Phase 1 helper functions | 9 | 9 |
 | Phase 1 policies | 30 | 30 |
+| `validate_user_role_assignment` | `SECURITY DEFINER`, `search_path=""` | as expected |
+| `assert_global_administrator_remains` | `SECURITY DEFINER`, `search_path=""` | as expected |
+| Last-administrator triggers | 7 | 7, all enabled |
 | `permissions` / `roles` / `role_permissions` | 14 / 6 / 37 | 14 / 6 / 37 |
 | `regions` / `bureaus` / `institutions` / `aliases` | 6 / 3 / 5 / 3 | 6 / 3 / 5 / 3 |
-| `anon` grants on the 10 Phase 1 tables | none | none |
+| `users` / `user_role_assignments` | 7 / 6 | 7 / 6 |
+| Permanent global administrators (`USER.MANAGE`) | ≥ 1 | 1 |
+| `anon` grants in `public` | none | none (all 32 tables) |
 | Helper `EXECUTE` for `anon` | denied | denied for all 9 |
-| `authenticated` grants | select/insert/update (+delete on `role_permissions`) | as planned |
+| `authenticated` grants | select/insert/update | as planned; `role_permissions` is `SELECT` only |
+| `authenticated` `TRUNCATE`/`REFERENCES`/`TRIGGER` | none | none |
 
 ---
 
@@ -578,24 +630,34 @@ Resolved on 28 October 2026:
    with `scripts/seed_demo_users.py`; the shared demo password lives only in
    `backend/.env`.
 3. **Live RLS suite run.** `14 passed, 0 skipped`; full suite `133 passed`.
+4. **Phase 1 security closure applied** (`0002_phase1_security_closure.sql`, 28
+   October 2026): F10, F12 and F14 closed in the database; F11 closed in the API.
+   Live RLS suite `29 passed, 0 skipped`; full suite `148 passed, 0 skipped, 13
+   warnings`. All 32 tables and every row count are unchanged.
 
 Still open:
 
-4. **Permission catalogue sign-off outstanding.** The decisions in §4.2,
-   especially Bureau Admin delegation, role differentiation and revocation
-   attribution, need explicit product approval.
-5. **Role/action matrix and state-machine baseline not signed off.** PRD §7.3 and
+5. **Permission catalogue sign-off outstanding.** The decisions in §4.2,
+   especially Bureau Admin delegation (still disabled), role differentiation and
+   revocation attribution, need explicit product approval.
+6. **Role/action matrix and state-machine baseline not signed off.** PRD §7.3 and
    §15.2 are baseline documents, not approved implementation contracts.
-6. **Audit gap.** No general audit table and no `revoked_by_user_id` column;
-   revocation attribution is log-only.
-7. **No create-user API, password-reset/MFA UI, alias edit/deactivate route, or
+7. **F8 — durable audit attribution is unresolved.** No general audit table and no
+   `revoked_by_user_id` column; revocation attribution is log-only and must not be
+   represented as a durable audit trail.
+8. **No create-user API, password-reset/MFA UI, alias edit/deactivate route, or
    institution re-verification.** These are documented Phase 1 limitations, not
    verification failures.
-8. **No official category/SLA source.** Phase 2 must confirm the category and SLA
+9. **No official category/SLA source.** Phase 2 must confirm the category and SLA
    source or label assumptions as demo-only.
-9. **Deferred hardening.** `anon` still holds full grants on 7 non-Phase-1 tables
-   (F10), and the assignment trigger couples to the UPDATE policies (F14). Both
-   need separately approved migrations before Phase 2 policies are added.
+10. **Role-catalogue writes have no endpoint.** `role_permissions` is `SELECT`-only
+    through the Data API; a future role-management feature needs a reviewed
+    endpoint or a guarded definer operation, not a restored raw grant.
+11. **Business-table `DELETE`/`MAINTAIN` grants remain.** `authenticated` still
+    holds the baseline wide grant on the seven non-Phase-1 tables; RLS with no
+    policies denies every row today, but the grant set should be narrowed when
+    Phase 2 adds policies for those tables. No change was made, because F10's
+    approved scope covered `anon` and `TRUNCATE`/`REFERENCES`/`TRIGGER` only.
 
 ---
 
@@ -604,12 +666,15 @@ Still open:
 | Criterion | Status |
 | --- | --- |
 | Migration and seed applied using §6 | **done** (28 Oct 2026) |
-| `tests/test_rls_db.py` returns 14 passed, 0 skipped | **done** |
+| Security closure `0002` applied and verified | **done** (28 Oct 2026) |
+| `tests/test_rls_db.py` returns 29 passed, 0 skipped | **done** |
+| Full backend suite green (148 passed) | **done** |
 | Post-apply queries return the expected counts | **done** (§3.5) |
+| 32 approved tables and existing records preserved | **done** |
 | Permission decisions in §4.2 explicitly approved (or amended) | **pending** |
-| Audit-attribution decision (F8) recorded | **pending** |
+| F8 audit-attribution decision recorded | **pending** |
 | Manual smoke check of `/me`, `/users`, bureau context and the inactive account through the running frontend/API | **pending** |
 
 Database verification is complete; product sign-off is not. Phase 1 remains
 **implementation and database verification complete, product sign-off pending**,
-and Phase 2 must not start until the two pending rows above are decided.
+and Phase 2 must not start until the pending rows above are decided.

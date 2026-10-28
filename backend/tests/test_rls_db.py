@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -449,20 +451,19 @@ def test_ordinary_user_cannot_write_reference_data(conn, accounts) -> None:
 
 
 def test_ordinary_user_cannot_grant_roles(conn, accounts) -> None:
-    """A self-grant of SUPER_ADMIN is refused.
+    """A self-grant of SUPER_ADMIN is refused before any row lookup.
 
-    The pre-existing ``validate_user_role_assignment`` trigger locks the target
-    role with ``SELECT ... FOR SHARE``, and PostgreSQL evaluates locking reads
-    against the UPDATE policy as well as the SELECT policy. An ordinary caller
-    therefore receives the trigger's denial (SQLSTATE ``P0001``) instead of a
-    bare row-level-security violation (``42501``). Both are refusals; what
-    matters is that no assignment row is created.
+    ``validate_user_role_assignment`` is SECURITY DEFINER and now gates every
+    untrusted session on the global ``USER.MANAGE`` capability, so an ordinary
+    caller receives a deterministic ``42501`` (insufficient privilege) instead
+    of the trigger's "Role must exist and be active" message. That ordering is
+    what stops the definer context from being used to probe accounts.
     """
     me = accounts["me"]
     with conn.transaction(force_rollback=True):
         _act_as(conn, me["id"])
         conn.execute("savepoint grant_probe")
-        with pytest.raises(psycopg.Error) as excinfo:
+        with pytest.raises(pg_errors.InsufficientPrivilege) as excinfo:
             conn.execute(
                 """
                 insert into public.user_role_assignments (user_id, role_id)
@@ -470,7 +471,8 @@ def test_ordinary_user_cannot_grant_roles(conn, accounts) -> None:
                 """,
                 (str(me["id"]),),
             )
-        assert excinfo.value.sqlstate in {"42501", "P0001"}
+        assert excinfo.value.sqlstate == "42501"
+        assert "USER.MANAGE" in str(excinfo.value)
         conn.execute("rollback to savepoint grant_probe")
         escalated = conn.execute(
             """
@@ -508,3 +510,484 @@ def test_super_admin_can_read_every_profile(conn, accounts) -> None:
         _act_as(conn, super_admin["id"])
         actual = conn.execute("select count(*) as total from public.users").fetchone()["total"]
     assert actual == expected
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 security closure (F10, F12, F14)
+# ---------------------------------------------------------------------------
+APPROVED_TABLES = {
+    "attachments",
+    "bureau_memberships",
+    "bureaus",
+    "case_access_grants",
+    "case_access_requests",
+    "case_action_history",
+    "case_bureau_assignments",
+    "case_deadlines",
+    "case_escalations",
+    "case_notes",
+    "case_officer_assignments",
+    "case_relationships",
+    "case_statuses",
+    "case_transfers",
+    "cases",
+    "complaint_categories",
+    "duplicate_candidates",
+    "escalation_rules",
+    "institution_aliases",
+    "institution_verification_tasks",
+    "institutions",
+    "intake_channels",
+    "notification_rules",
+    "notifications",
+    "permissions",
+    "regions",
+    "role_permissions",
+    "roles",
+    "sla_policies",
+    "submissions",
+    "user_role_assignments",
+    "users",
+}
+
+BUSINESS_TABLES = (
+    "cases",
+    "case_relationships",
+    "complaint_categories",
+    "duplicate_candidates",
+    "institution_verification_tasks",
+    "intake_channels",
+    "submissions",
+)
+
+
+def _permanent_admin_assignment(executor: Any, user_id: UUID) -> UUID | None:
+    """The active, non-expiring SUPER_ADMIN assignment of one user."""
+    row = executor.execute(
+        """
+        select ura.id
+          from public.user_role_assignments ura
+          join public.roles r
+            on r.id = ura.role_id
+           and r.is_active
+           and r.scope_type = 'global'
+         where ura.user_id = %s
+           and ura.bureau_id is null
+           and ura.assignment_status = 'active'
+           and ura.expires_at is null
+           and r.code = 'SUPER_ADMIN'
+         limit 1
+        """,
+        (str(user_id),),
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def _super_admin_or_skip(accounts) -> dict:
+    super_admin = accounts["super"]
+    if super_admin is None:
+        pytest.skip("No active Super Admin account found.")
+    return super_admin
+
+
+def _expect_last_admin_refusal(conn, statement: str, params: tuple = ()) -> None:
+    """Assert the guard refuses the statement, then keep the transaction usable."""
+    conn.execute("savepoint admin_guard")
+    with pytest.raises(pg_errors.RaiseException) as excinfo:
+        conn.execute(statement, params)
+    assert "permanent global administrator" in str(excinfo.value)
+    conn.execute("rollback to savepoint admin_guard")
+
+
+def test_anon_has_no_grants_on_any_public_table(conn) -> None:
+    """F10: `anon` holds no privilege on any public table."""
+    total = conn.execute(
+        """
+        select count(*) as total
+          from information_schema.role_table_grants
+         where table_schema = 'public' and grantee = 'anon'
+        """
+    ).fetchone()["total"]
+    assert total == 0
+
+
+def test_authenticated_has_no_ddl_privileges_on_business_tables(conn) -> None:
+    """F10: no TRUNCATE/REFERENCES/TRIGGER anywhere in the public schema."""
+    rows = conn.execute(
+        """
+        select table_name, privilege_type
+          from information_schema.role_table_grants
+         where table_schema = 'public'
+           and grantee = 'authenticated'
+           and privilege_type in ('TRUNCATE', 'REFERENCES', 'TRIGGER')
+        """
+    ).fetchall()
+    assert rows == []
+
+
+def test_authenticated_cannot_write_the_permission_catalogue(conn, accounts) -> None:
+    """F12: the capability catalogue is read-only through the Data API."""
+    super_admin = _super_admin_or_skip(accounts)
+    with conn.transaction(force_rollback=True):
+        _act_as(conn, super_admin["id"])
+        statements = (
+            "delete from public.role_permissions where false",
+            "update public.role_permissions set granted_at = granted_at where false",
+            """
+            insert into public.role_permissions (role_id, permission_id)
+            select r.id, p.id from public.roles r, public.permissions p where false
+            """,
+        )
+        for statement in statements:
+            conn.execute("savepoint catalogue_probe")
+            with pytest.raises(pg_errors.InsufficientPrivilege):
+                conn.execute(statement)
+            conn.execute("rollback to savepoint catalogue_probe")
+
+
+def test_cleared_claims_do_not_unlock_the_assignment_trigger(conn, accounts) -> None:
+    """F14: clearing request.jwt.claims must not skip the capability gate.
+
+    The previous draft keyed its gate on `auth_uid() IS NULL`, but that GUC is
+    client-settable, so a caller could reach the SECURITY DEFINER body and use
+    its error messages to probe accounts. The gate now keys off the session.
+    """
+    me = accounts["me"]
+    with conn.transaction(force_rollback=True):
+        _act_as(conn, me["id"])
+        conn.execute("select set_config('request.jwt.claims', '', true)")
+        conn.execute("savepoint claims_probe")
+        with pytest.raises(pg_errors.InsufficientPrivilege) as excinfo:
+            conn.execute(
+                """
+                insert into public.user_role_assignments (user_id, role_id)
+                values (%s, gen_random_uuid())
+                """,
+                (str(me["id"]),),
+            )
+        assert excinfo.value.sqlstate == "42501"
+        assert "USER.MANAGE" in str(excinfo.value)
+        assert "Role must exist" not in str(excinfo.value)
+        conn.execute("rollback to savepoint claims_probe")
+
+
+def test_last_administrator_cannot_be_revoked(conn, accounts) -> None:
+    """F12: self-revocation of the only permanent administrator is refused."""
+    super_admin = _super_admin_or_skip(accounts)
+    with conn.transaction(force_rollback=True):
+        assignment_id = _permanent_admin_assignment(conn, super_admin["id"])
+        assert assignment_id is not None
+        _act_as(conn, super_admin["id"])
+        _expect_last_admin_refusal(
+            conn,
+            """
+            update public.user_role_assignments
+               set assignment_status = 'revoked', revoked_at = now()
+             where id = %s
+            """,
+            (str(assignment_id),),
+        )
+        still_active = conn.execute(
+            "select assignment_status from public.user_role_assignments where id = %s",
+            (str(assignment_id),),
+        ).fetchone()["assignment_status"]
+    assert still_active == "active"
+
+
+def test_last_administrator_cannot_receive_a_future_expiry(conn, accounts) -> None:
+    """F12: an expiry in the future would silently remove the last admin."""
+    super_admin = _super_admin_or_skip(accounts)
+    with conn.transaction(force_rollback=True):
+        assignment_id = _permanent_admin_assignment(conn, super_admin["id"])
+        assert assignment_id is not None
+        _act_as(conn, super_admin["id"])
+        _expect_last_admin_refusal(
+            conn,
+            "update public.user_role_assignments set expires_at = now() + interval '30 days'"
+            " where id = %s",
+            (str(assignment_id),),
+        )
+        expires_at = conn.execute(
+            "select expires_at from public.user_role_assignments where id = %s",
+            (str(assignment_id),),
+        ).fetchone()["expires_at"]
+    assert expires_at is None
+
+
+def test_last_administrator_cannot_be_deactivated(conn, accounts) -> None:
+    """F12: the last administrator cannot deactivate their own account."""
+    super_admin = _super_admin_or_skip(accounts)
+    with conn.transaction(force_rollback=True):
+        _act_as(conn, super_admin["id"])
+        _expect_last_admin_refusal(
+            conn,
+            "update public.users set account_status = 'suspended' where id = %s",
+            (str(super_admin["id"]),),
+        )
+        status = conn.execute(
+            "select account_status from public.users where id = %s",
+            (str(super_admin["id"]),),
+        ).fetchone()["account_status"]
+    assert status == "active"
+
+
+def test_user_manage_permission_cannot_be_deactivated(conn, accounts) -> None:
+    """F12: disabling USER.MANAGE must not strand the administrator."""
+    super_admin = _super_admin_or_skip(accounts)
+    with conn.transaction(force_rollback=True):
+        _act_as(conn, super_admin["id"])
+        _expect_last_admin_refusal(
+            conn,
+            "update public.permissions set is_active = false where code = 'USER.MANAGE'",
+        )
+        active = conn.execute(
+            "select is_active from public.permissions where code = 'USER.MANAGE'"
+        ).fetchone()["is_active"]
+    assert active is True
+
+
+def test_administrator_role_cannot_be_deactivated(conn, accounts) -> None:
+    """F12: disabling the administrator role must not strand the administrator."""
+    super_admin = _super_admin_or_skip(accounts)
+    with conn.transaction(force_rollback=True):
+        _act_as(conn, super_admin["id"])
+        _expect_last_admin_refusal(
+            conn,
+            "update public.roles set is_active = false where code = 'SUPER_ADMIN'",
+        )
+        active = conn.execute(
+            "select is_active from public.roles where code = 'SUPER_ADMIN'"
+        ).fetchone()["is_active"]
+    assert active is True
+
+
+def test_last_administrator_grant_cannot_be_deleted(conn, accounts) -> None:
+    """F12: the owner path cannot strip the last USER.MANAGE grant either."""
+    super_admin = _super_admin_or_skip(accounts)
+    with conn.transaction(force_rollback=True):
+        pair = conn.execute(
+            """
+            select rp.role_id, rp.permission_id
+              from public.role_permissions rp
+              join public.roles r on r.id = rp.role_id and r.code = 'SUPER_ADMIN'
+              join public.permissions p
+                on p.id = rp.permission_id and p.code = 'USER.MANAGE'
+            """
+        ).fetchone()
+        assert pair is not None
+        _expect_last_admin_refusal(
+            conn,
+            "delete from public.role_permissions where role_id = %s and permission_id = %s",
+            (str(pair["role_id"]), str(pair["permission_id"])),
+        )
+        remaining = conn.execute(
+            "select count(*) as total from public.role_permissions"
+            " where role_id = %s and permission_id = %s",
+            (str(pair["role_id"]), str(pair["permission_id"])),
+        ).fetchone()["total"]
+    assert remaining == 1
+
+
+def test_expiring_second_administrator_does_not_satisfy_the_invariant(
+    conn, accounts
+) -> None:
+    """F12: an administrator who will expire does not protect the last one."""
+    super_admin = _super_admin_or_skip(accounts)
+    me = accounts["me"]
+    with conn.transaction(force_rollback=True):
+        assignment_id = _permanent_admin_assignment(conn, super_admin["id"])
+        assert assignment_id is not None
+        conn.execute(
+            """
+            insert into public.user_role_assignments (user_id, role_id, assignment_status, expires_at)
+            select %s, id, 'active', now() + interval '90 days'
+              from public.roles where code = 'SUPER_ADMIN'
+            """,
+            (str(me["id"]),),
+        )
+        _expect_last_admin_refusal(
+            conn,
+            "update public.user_role_assignments set expires_at = now() + interval '30 days'"
+            " where id = %s",
+            (str(assignment_id),),
+        )
+
+
+def test_revocation_allowed_when_second_permanent_administrator_exists(
+    conn, accounts
+) -> None:
+    """F12 negative control: a second permanent administrator unblocks removal."""
+    super_admin = _super_admin_or_skip(accounts)
+    me = accounts["me"]
+    with conn.transaction(force_rollback=True):
+        assignment_id = _permanent_admin_assignment(conn, super_admin["id"])
+        assert assignment_id is not None
+        conn.execute(
+            """
+            insert into public.user_role_assignments (user_id, role_id, assignment_status)
+            select %s, id, 'active' from public.roles where code = 'SUPER_ADMIN'
+            """,
+            (str(me["id"]),),
+        )
+        updated = conn.execute(
+            """
+            update public.user_role_assignments
+               set assignment_status = 'revoked', revoked_at = now()
+             where id = %s
+            """,
+            (str(assignment_id),),
+        )
+        assert updated.rowcount == 1
+        permanent_admins = conn.execute(
+            """
+            select count(*) as total
+              from public.user_role_assignments ura
+              join public.roles r
+                on r.id = ura.role_id and r.is_active and r.scope_type = 'global'
+              join public.role_permissions rp on rp.role_id = r.id
+              join public.permissions p
+                on p.id = rp.permission_id and p.is_active and p.code = 'USER.MANAGE'
+              join public.users u on u.id = ura.user_id and u.account_status = 'active'
+             where ura.bureau_id is null
+               and ura.assignment_status = 'active'
+               and ura.expires_at is null
+            """
+        ).fetchone()["total"]
+    assert permanent_admins == 1
+
+
+def test_concurrent_revocations_cannot_remove_both_administrators(accounts) -> None:
+    """F12: the advisory lock plus fresh snapshot prevents a two-session lockout.
+
+    Two sessions each revoke a different administrator. The first commits and
+    the second blocks on the guard's advisory lock; after the commit it must see
+    the new state and refuse. This needs real transactions (a rollback cannot
+    prove the interaction), so the temporary assignment is removed in a
+    ``finally`` block and the administrator count is re-checked afterwards.
+    """
+    assert DATABASE_URL
+    super_admin = _super_admin_or_skip(accounts)
+    me = accounts["me"]
+
+    with psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=False) as owner:
+        assignment_id = _permanent_admin_assignment(owner, super_admin["id"])
+        assert assignment_id is not None
+        temporary_id = owner.execute(
+            """
+            insert into public.user_role_assignments (user_id, role_id, assignment_status)
+            select %s, id, 'active' from public.roles where code = 'SUPER_ADMIN'
+            returning id
+            """,
+            (str(me["id"]),),
+        ).fetchone()["id"]
+        owner.commit()
+
+    session_a: psycopg.Connection | None = None
+    session_b: psycopg.Connection | None = None
+    outcome: dict[str, str | None] = {"result": None}
+    try:
+        session_a = psycopg.connect(
+            DATABASE_URL, row_factory=dict_row, autocommit=False
+        )
+        _act_as(session_a, super_admin["id"])
+        session_a.execute(
+            """
+            update public.user_role_assignments
+               set assignment_status = 'revoked', revoked_at = now()
+             where id = %s
+            """,
+            (str(temporary_id),),
+        )
+
+        session_b = psycopg.connect(
+            DATABASE_URL, row_factory=dict_row, autocommit=False
+        )
+        _act_as(session_b, super_admin["id"])
+
+        def revoke_last_administrator() -> None:
+            try:
+                session_b.execute(
+                    """
+                    update public.user_role_assignments
+                       set assignment_status = 'revoked', revoked_at = now()
+                     where id = %s
+                    """,
+                    (str(assignment_id),),
+                )
+                session_b.commit()
+                outcome["result"] = "accepted"
+            except psycopg.Error as exc:
+                outcome["result"] = exc.sqlstate
+                session_b.rollback()
+
+        worker = threading.Thread(target=revoke_last_administrator, daemon=True)
+        worker.start()
+        time.sleep(0.75)
+        assert worker.is_alive(), "the second revocation was not blocked by the guard"
+        session_a.commit()
+        worker.join(timeout=30)
+        assert not worker.is_alive()
+        assert outcome["result"] == "P0001"
+    finally:
+        for session in (session_a, session_b):
+            if session is not None and not session.closed:
+                try:
+                    session.rollback()
+                finally:
+                    session.close()
+        with psycopg.connect(
+            DATABASE_URL, row_factory=dict_row, autocommit=True
+        ) as cleanup:
+            cleanup.execute(
+                """
+                update public.user_role_assignments
+                   set assignment_status = 'active', revoked_at = null
+                 where id = %s and assignment_status = 'revoked'
+                """,
+                (str(assignment_id),),
+            )
+            cleanup.execute(
+                "delete from public.user_role_assignments where id = %s",
+                (str(temporary_id),),
+            )
+            remaining = cleanup.execute(
+                """
+                select count(*) as total
+                  from public.user_role_assignments ura
+                  join public.roles r
+                    on r.id = ura.role_id and r.is_active and r.scope_type = 'global'
+                  join public.role_permissions rp on rp.role_id = r.id
+                  join public.permissions p
+                    on p.id = rp.permission_id and p.is_active and p.code = 'USER.MANAGE'
+                  join public.users u on u.id = ura.user_id and u.account_status = 'active'
+                 where ura.bureau_id is null
+                   and ura.assignment_status = 'active'
+                   and ura.expires_at is null
+                """
+            ).fetchone()["total"]
+        assert remaining >= 1
+
+    assert outcome["result"] == "P0001"
+
+
+def test_public_schema_still_has_32_tables(conn) -> None:
+    """The closure creates no table and removes none."""
+    names = {
+        row["tablename"]
+        for row in conn.execute(
+            "select tablename from pg_tables where schemaname = 'public'"
+        ).fetchall()
+    }
+    assert len(names) == 32
+    assert names == APPROVED_TABLES
+
+
+def test_authenticated_cannot_delete_role_assignments(conn, accounts) -> None:
+    """F12: there is no Data API path that hard-deletes an assignment."""
+    me = accounts["me"]
+    with conn.transaction(force_rollback=True):
+        _act_as(conn, me["id"])
+        conn.execute("savepoint delete_probe")
+        with pytest.raises(pg_errors.InsufficientPrivilege):
+            conn.execute("delete from public.user_role_assignments where false")
+        conn.execute("rollback to savepoint delete_probe")

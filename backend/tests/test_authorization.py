@@ -231,7 +231,7 @@ def test_reference_data_writes_are_denied_without_manage(
         json={"code": "xx", "name": "Test region"},
     )
     assert response.status_code == 403
-    assert response.json()["error"]["code"] == "FORBIDDEN"
+    assert response.json()["error"]["code"] == "GLOBAL_CAPABILITY_REQUIRED"
 
 
 def test_bureau_membership_management_is_denied_to_bureau_admin(
@@ -247,7 +247,7 @@ def test_bureau_membership_management_is_denied_to_bureau_admin(
         },
     )
     assert response.status_code == 403
-    assert response.json()["error"]["code"] == "FORBIDDEN"
+    assert response.json()["error"]["code"] == "GLOBAL_CAPABILITY_REQUIRED"
 
 
 # ---------------------------------------------------------------------------

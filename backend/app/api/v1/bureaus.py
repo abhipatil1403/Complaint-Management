@@ -9,7 +9,12 @@ from fastapi import APIRouter, Depends, Query, status
 from app.api.pagination import decode_cursor, page_response, validate_limit
 from app.api.v1.serializers import bureau_member_payload, bureau_payload
 from app.auth import permissions as perms
-from app.auth.dependencies import RequestContext, get_request_context, require_permission
+from app.auth.dependencies import (
+    RequestContext,
+    get_request_context,
+    require_global_permission,
+    require_permission,
+)
 from app.core.errors import ApiError
 from app.repositories import admin as admin_repo
 from app.repositories import reference as repo
@@ -82,7 +87,7 @@ async def get_bureau(
 )
 async def create_bureau(
     payload: BureauCreate,
-    ctx: RequestContext = Depends(require_permission(perms.BUREAU_MANAGE)),
+    ctx: RequestContext = Depends(require_global_permission(perms.BUREAU_MANAGE)),
 ) -> BureauOut:
     if payload.parent_bureau_id is not None:
         parent = await repo.get_bureau(ctx.conn, payload.parent_bureau_id)
@@ -106,7 +111,7 @@ async def create_bureau(
 async def update_bureau(
     bureau_id: UUID,
     payload: BureauUpdate,
-    ctx: RequestContext = Depends(require_permission(perms.BUREAU_MANAGE)),
+    ctx: RequestContext = Depends(require_global_permission(perms.BUREAU_MANAGE)),
 ) -> BureauOut:
     values = payload.model_dump(exclude_unset=True)
     if values.get("parent_bureau_id") is not None:
@@ -159,10 +164,8 @@ async def list_bureau_members(
 )
 async def add_bureau_membership(
     payload: MembershipCreate,
-    ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(require_global_permission(perms.BUREAU_MEMBERS_MANAGE)),
 ) -> BureauMemberOut:
-    require_bureau_capability(ctx, payload.bureau_id, perms.BUREAU_MEMBERS_MANAGE)
-
     bureau = await repo.get_bureau(ctx.conn, payload.bureau_id)
     if bureau is None:
         raise ApiError(404, "NOT_FOUND", "Bureau not found.")
@@ -202,12 +205,11 @@ async def add_bureau_membership(
 )
 async def end_bureau_membership(
     membership_id: UUID,
-    ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(require_global_permission(perms.BUREAU_MEMBERS_MANAGE)),
 ) -> BureauMemberOut:
     existing = await repo.get_membership(ctx.conn, membership_id)
     if existing is None:
         raise ApiError(404, "NOT_FOUND", "Bureau membership not found.")
-    require_bureau_capability(ctx, existing["bureau_id"], perms.BUREAU_MEMBERS_MANAGE)
 
     row = await repo.end_membership(ctx.conn, membership_id)
     if row is None:
