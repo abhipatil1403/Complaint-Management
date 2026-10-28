@@ -15,13 +15,18 @@ import { toApiError, type ApiError } from "../lib/api";
 import { usePagedResource, useResource } from "../lib/useResource";
 import type { Bureau, BureauMember, MembershipType, UserSummary } from "../types";
 import { NotFoundPage } from "./NotFoundPage";
+import { PermissionDeniedPage } from "./PermissionDeniedPage";
 
 export function BureauDetailPage() {
+  const { has } = useAuth();
   const { bureauId } = useParams<{ bureauId: string }>();
+  if (!has("bureau.view")) {
+    return <PermissionDeniedPage />;
+  }
   if (!bureauId) {
     return <NotFoundPage />;
   }
-  return <BureauDetailContent bureauId={bureauId} />;
+  return <BureauDetailContent key={bureauId} bureauId={bureauId} />;
 }
 
 function BureauDetailContent({ bureauId }: { bureauId: string }) {
@@ -132,7 +137,7 @@ function BureauDetailContent({ bureauId }: { bureauId: string }) {
         </article>
       </div>
 
-      {canManage ? <BureauEditForm key={data.updated_at ?? data.id} bureau={data} /> : null}
+      {canManage ? <BureauEditForm key={data.id} bureau={data} /> : null}
 
       {canViewMembers ? (
         <BureauMembersSection bureauId={bureauId} canManage={canManageMembers} />

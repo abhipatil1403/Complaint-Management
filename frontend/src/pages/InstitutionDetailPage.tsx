@@ -20,6 +20,7 @@ import type {
   VerificationStatus,
 } from "../types";
 import { NotFoundPage } from "./NotFoundPage";
+import { PermissionDeniedPage } from "./PermissionDeniedPage";
 
 function nullable(value: string): string | null {
   const trimmed = value.trim();
@@ -27,11 +28,15 @@ function nullable(value: string): string | null {
 }
 
 export function InstitutionDetailPage() {
+  const { has } = useAuth();
   const { institutionId } = useParams<{ institutionId: string }>();
+  if (!has("institution.view")) {
+    return <PermissionDeniedPage />;
+  }
   if (!institutionId) {
     return <NotFoundPage />;
   }
-  return <InstitutionDetailContent institutionId={institutionId} />;
+  return <InstitutionDetailContent key={institutionId} institutionId={institutionId} />;
 }
 
 function InstitutionDetailContent({ institutionId }: { institutionId: string }) {
@@ -176,7 +181,7 @@ function InstitutionDetailContent({ institutionId }: { institutionId: string }) 
 
       {has("institution.manage") ? (
         <InstitutionEditForm
-          key={data.updated_at ?? data.id}
+          key={data.id}
           institution={data}
           regions={regions.items}
           onSaved={institution.reload}

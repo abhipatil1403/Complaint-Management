@@ -15,13 +15,18 @@ import { toApiError, type ApiError } from "../lib/api";
 import { useResource } from "../lib/useResource";
 import type { AccountStatus, Role, UserDetail } from "../types";
 import { NotFoundPage } from "./NotFoundPage";
+import { PermissionDeniedPage } from "./PermissionDeniedPage";
 
 export function UserDetailPage() {
+  const { has } = useAuth();
   const { userId } = useParams<{ userId: string }>();
+  if (!has("user.view")) {
+    return <PermissionDeniedPage />;
+  }
   if (!userId) {
     return <NotFoundPage />;
   }
-  return <UserDetailContent userId={userId} />;
+  return <UserDetailContent key={userId} userId={userId} />;
 }
 
 function UserDetailContent({ userId }: { userId: string }) {
@@ -145,7 +150,7 @@ function UserDetailContent({ userId }: { userId: string }) {
 
       {canManage ? (
         <div className="grid grid-2">
-          <ProfileForm key={data.full_name} user={data} onSaved={user.reload} />
+          <ProfileForm key={data.id} user={data} onSaved={user.reload} />
           <AccountStatusCard user={data} onChanged={user.reload} />
         </div>
       ) : null}
