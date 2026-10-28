@@ -7,9 +7,12 @@ everything else is refused with a stable error code.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
 from app.auth import permissions as perms
+from app.auth.principal import Principal, RoleAssignment
 from app.repositories import admin as admin_repo
 from app.repositories import reference as reference_repo
 from tests.conftest import (
@@ -382,6 +385,35 @@ def test_permission_code_casing_round_trips() -> None:
     for api_code in perms.PHASE1_PERMISSIONS:
         assert perms.to_db_code(api_code) == api_code.upper()
         assert perms.to_api_code(perms.to_db_code(api_code)) == api_code
+
+
+def test_missing_bureau_id_does_not_turn_a_bureau_role_into_a_global_grant() -> None:
+    """Defence in depth: only a role whose scope_type is global can be global."""
+    assignment = RoleAssignment(
+        assignment_id=uuid4(),
+        role_code=perms.SUPER_ADMIN,
+        role_name="Super Admin",
+        scope_type="bureau",
+        bureau_id=None,
+        bureau_name=None,
+        permissions=frozenset({perms.USER_MANAGE}),
+    )
+    principal = Principal(
+        user_id=uuid4(),
+        full_name="Misconfigured Grant",
+        display_name=None,
+        official_email="misconfigured@demo.invalid",
+        designation=None,
+        employee_code=None,
+        account_status="active",
+        roles=(assignment,),
+        memberships=(),
+        global_permissions=frozenset(),
+        bureau_permissions={},
+    )
+    assert assignment.is_global is False
+    assert principal.is_super_admin is False
+    assert principal.permissions_for(None) == frozenset()
 
 
 # ---------------------------------------------------------------------------

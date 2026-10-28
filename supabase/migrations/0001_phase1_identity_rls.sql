@@ -110,6 +110,10 @@ as $$
           join public.roles r
             on r.id = ura.role_id
            and r.is_active
+           -- Defence in depth: a bureau-scoped role must never count as a
+           -- global grant even if its bureau_id is null (the schema trigger
+           -- already rejects that shape).
+           and r.scope_type = 'global'
           join public.role_permissions rp
             on rp.role_id = r.id
           join public.permissions p
@@ -296,16 +300,16 @@ create policy phase1_users_select on public.users
     to authenticated
     using (
         id = public.auth_uid()
-        or public.has_permission('USER.VIEW')
-        or public.has_permission('USER.MANAGE')
+        or public.has_global_permission('USER.VIEW')
+        or public.has_global_permission('USER.MANAGE')
     );
 
+-- There is intentionally no self-update policy. Profile administration is a
+-- global USER.MANAGE capability; a self-service update policy would also let a
+-- signed-in user write privileged columns (is_super_admin, account_status)
+-- through the exposed PostgREST API. The drop also removes the policy if an
+-- earlier draft of this migration was applied locally.
 drop policy if exists phase1_users_update_self on public.users;
-create policy phase1_users_update_self on public.users
-    for update
-    to authenticated
-    using (id = public.auth_uid() and public.is_active_user())
-    with check (id = public.auth_uid());
 
 drop policy if exists phase1_users_update_admin on public.users;
 create policy phase1_users_update_admin on public.users
@@ -387,8 +391,8 @@ create policy phase1_user_role_assignments_select on public.user_role_assignment
     to authenticated
     using (
         user_id = public.auth_uid()
-        or public.has_permission('USER.VIEW')
-        or public.has_permission('USER.MANAGE')
+        or public.has_global_permission('USER.VIEW')
+        or public.has_global_permission('USER.MANAGE')
     );
 
 drop policy if exists phase1_user_role_assignments_insert on public.user_role_assignments;

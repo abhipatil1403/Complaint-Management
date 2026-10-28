@@ -118,6 +118,14 @@ class IdentityService:
                 # Membership was ended after the role grant: the grant no longer
                 # contributes capabilities (fail closed).
                 continue
+            if row["scope_type"] == "global" and bureau_id is not None:
+                # Invalid shape; PostgreSQL's trigger rejects it, but never
+                # let a global role be narrowed into a bureau grant.
+                continue
+            if row["scope_type"] == "bureau" and bureau_id is None:
+                # Invalid shape; ignore the assignment rather than treating it
+                # as a global grant.
+                continue
             roles.append(
                 RoleAssignment(
                     assignment_id=row["assignment_id"],

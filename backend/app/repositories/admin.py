@@ -340,9 +340,12 @@ async def revoke_role_assignment(
     conn: AsyncConnection,
     *,
     assignment_id: UUID,
-    revoked_by_user_id: UUID,
     reason: str,
 ) -> dict[str, Any] | None:
+    # The 32-table schema has no revoked_by_user_id column on
+    # user_role_assignments. Who revoked the grant is recorded by the API's
+    # structured audit log, not here; see the known audit gap in
+    # docs/PHASE1_IMPLEMENTATION.md.
     return await _fetch_one(
         conn,
         """
@@ -358,6 +361,5 @@ async def revoke_role_assignment(
         {
             "assignment_id": str(assignment_id),
             "reason": reason,
-            "revoked_by_user_id": str(revoked_by_user_id),
         },
     )

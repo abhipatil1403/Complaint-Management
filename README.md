@@ -52,11 +52,11 @@ scripts/            idempotent demo identity provisioning
 The migration is **additive**: it creates helper functions, grants and RLS policies. It does not create, rename, drop or alter any of the 32 application tables, and it adds no columns.
 
 ```bash
-psql "$DATABASE_URL" -f supabase/migrations/0001_phase1_identity_rls.sql
-psql "$DATABASE_URL" -f supabase/seed/phase1_identity_seed.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/0001_phase1_identity_rls.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/seed/phase1_identity_seed.sql
 ```
 
-`0001_phase1_identity_rls.sql` is wrapped in a transaction. Review it and obtain approval before applying it to any shared environment. Never run destructive SQL automatically.
+`0001_phase1_identity_rls.sql` is wrapped in a transaction. Review it and obtain approval before applying it to any shared environment. Never run destructive SQL automatically. Do **not** use `supabase db reset` against a linked remote project; it is destructive. See [`docs/PHASE1_VERIFICATION.md`](docs/PHASE1_VERIFICATION.md) for the safe apply and rollback procedure.
 
 ### 2. Backend
 

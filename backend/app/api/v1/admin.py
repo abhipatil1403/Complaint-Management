@@ -280,7 +280,6 @@ async def revoke_role_assignment(
     row = await repo.revoke_role_assignment(
         ctx.conn,
         assignment_id=assignment_id,
-        revoked_by_user_id=ctx.principal.user_id,
         reason=payload.reason,
     )
     if row is None:

@@ -21,7 +21,10 @@ class RoleAssignment:
 
     @property
     def is_global(self) -> bool:
-        return self.bureau_id is None
+        # A bureau-scoped role is never global, even if a bad row has a null
+        # bureau_id. PostgreSQL's validate_user_role_assignment trigger rejects
+        # that shape, but the API must fail closed on its own.
+        return self.scope_type == "global" and self.bureau_id is None
 
 
 @dataclass(frozen=True)

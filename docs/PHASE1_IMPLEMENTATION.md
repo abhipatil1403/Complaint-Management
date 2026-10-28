@@ -171,11 +171,11 @@ Migration: `supabase/migrations/0001_phase1_identity_rls.sql` (single transactio
 
 All helpers are `SECURITY DEFINER` where they read identity tables, with `search_path = ''` and schema-qualified identifiers. Execute is revoked from `PUBLIC` and `anon`; granted to `authenticated` and `service_role`.
 
-### Policies (31)
+### Policies (30)
 
 | Table | Policies | Read rule | Write rule |
 | --- | --- | --- | --- |
-| `users` | 3 | self, `USER.VIEW`, `USER.MANAGE` | self update; global `USER.MANAGE` |
+| `users` | 2 | self, global `USER.VIEW` / `USER.MANAGE` | global `USER.MANAGE` only |
 | `roles` | 3 | any active user | global `ROLE.MANAGE` |
 | `permissions` | 3 | any active user | global `ROLE.MANAGE` |
 | `role_permissions` | 4 | any active user | global `ROLE.MANAGE` |
@@ -190,6 +190,8 @@ All ten tables had RLS enabled already but **zero policies**. The migration adds
 
 - `anon` loses all table and helper access.
 - `authenticated` receives only `select/insert/update` (plus `delete` on `role_permissions` for catalogue maintenance). There is no `delete` grant on business/reference tables, so deactivation remains the only removal path.
+- There is deliberately **no self-update policy on `users`**. Profile administration is a global `USER.MANAGE` capability; without this restriction a signed-in user could write `is_super_admin` or `account_status` through the exposed PostgREST API. No self-service profile-edit endpoint exists in Phase 1, so no product behaviour is lost.
+- `USER.VIEW` / `USER.MANAGE` checks in policies use `has_global_permission`, matching the API's `require_global_permission`; a bureau-scoped grant can never read the user directory.
 - RLS is not disabled and no table ownership is changed.
 
 ---
@@ -283,7 +285,7 @@ The browser treats the API's permission list as display state only.
 `supabase/migrations/0001_phase1_identity_rls.sql`
 
 - 9 helper functions.
-- 31 RLS policies on 10 tables.
+- 30 RLS policies on 10 tables.
 - Table/function grants and `anon` revokes.
 - No `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE` or column additions.
 - Wrapped in `BEGIN … COMMIT`.
@@ -320,9 +322,9 @@ The migration and seed were **not applied to a live project** because no databas
 
 Command: `python -m pytest -o addopts= -q` from `backend/`
 
-Result: **118 passed, 10 skipped, 13 warnings in 5.60s**
+Result: **119 passed, 14 skipped, 13 warnings in 3.79s**
 
-The 10 skips are the live RLS suite (`tests/test_rls_db.py`), which requires `DATABASE_URL`. The warnings are `InsecureKeyLengthWarning` from short HMAC keys generated inside the security tests; they are test fixtures, not deployed secrets.
+The 14 skips are the live RLS suite (`tests/test_rls_db.py`), which requires `DATABASE_URL`. The warnings are `InsecureKeyLengthWarning` from short HMAC keys generated inside the security tests; they are test fixtures, not deployed secrets.
 
 Coverage areas:
 
@@ -331,7 +333,7 @@ Coverage areas:
 - `test_endpoints.py` — route contracts, validation, state transitions, self-deactivation and last-Super-Admin guards.
 - `test_pagination.py` — cursor encoding/limits.
 - `test_seed_consistency.py` — permission/role catalogue parity between Python and SQL seed.
-- `test_rls_db.py` — live database assertions (skipped locally): anon denial, self-only profile and role visibility, helper parity with the caller's grants, ordinary users unable to write reference data or grant roles, Super Admin reference management and profile visibility. Every test uses `force_rollback=True`.
+- `test_rls_db.py` — live database assertions (skipped locally): anon denial, self-only profile and role visibility, helper parity with the caller's grants, bureau grants requiring their own active context and not leaking into another bureau, users unable to self-escalate privileged profile columns or edit another profile, ordinary users unable to write reference data or grant roles, Super Admin reference management and profile visibility. Every test uses `force_rollback=True`.
 
 ### Frontend
 
@@ -355,8 +357,8 @@ The initial scaffold used Vite 5 / Vitest 2 / React Router 6, which produced 8 a
 See `README.md` for full setup. Summary:
 
 ```bash
-psql "$DATABASE_URL" -f supabase/migrations/0001_phase1_identity_rls.sql
-psql "$DATABASE_URL" -f supabase/seed/phase1_identity_seed.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/0001_phase1_identity_rls.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/seed/phase1_identity_seed.sql
 
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
@@ -384,6 +386,8 @@ Minimum live verification sequence:
 
 - **Token verification:** JWKS by default; issuer/audience/expiry checked; `service_role` tokens rejected; no "decode without verify" path.
 - **RLS:** every Phase 1 table has policies; `anon` has no access; writes require global capabilities.
+- **Scope confusion:** `has_global_permission` requires `roles.scope_type = 'global'` as well as `bureau_id IS NULL`, and the API's `RoleAssignment.is_global` applies the same rule. This is defence in depth on top of the existing `validate_user_role_assignment` trigger, which already rejects a bureau role with no bureau.
+- **No self-service profile writes:** the `users` table has no self-update policy, so a signed-in user cannot write `is_super_admin`, `account_status` or another profile through PostgREST. Admin profile changes require global `USER.MANAGE`.
 - **Least privilege:** no DELETE grants on business tables; reference data deactivates.
 - **Header handling:** `X-Active-Bureau` is validated server-side, never trusted as an authorization claim on its own.
 - **Error handling:** stable error envelope; no SQL text, connection strings or token contents returned to the client.
