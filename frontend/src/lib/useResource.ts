@@ -54,7 +54,10 @@ export function usePagedResource<T>(
     setError(null);
   }
 
-  const generation = useRef(0);
+  const inFlightRef = useRef(false);
+  const currentKeyRef = useRef(cacheKey);
+  currentKeyRef.current = cacheKey;
+
   const itemsRef = useRef(items);
   useEffect(() => {
     itemsRef.current = items;
@@ -68,7 +71,11 @@ export function usePagedResource<T>(
         setLoading(false);
         return;
       }
-      const run = ++generation.current;
+      if (inFlightRef.current && silent) {
+        return;
+      }
+      const targetKey = cacheKey;
+      inFlightRef.current = true;
       if (!silent) {
         setLoading(true);
         setError(null);
@@ -84,7 +91,8 @@ export function usePagedResource<T>(
           limit: fetchLimit,
         });
 
-        if (run !== generation.current) {
+        // Only discard if the user navigated to different filters/path
+        if (currentKeyRef.current !== targetKey) {
           return;
         }
 
@@ -112,17 +120,19 @@ export function usePagedResource<T>(
             setItems(page.data);
           }
           setCursor(page.page.next_cursor);
-          pagedCache.set(cacheKey, { items: page.data, cursor: page.page.next_cursor });
+          pagedCache.set(targetKey, { items: page.data, cursor: page.page.next_cursor });
         }
+        setError(null);
       } catch (raw) {
-        if (run !== generation.current) {
+        if (currentKeyRef.current !== targetKey) {
           return;
         }
         if (!silent) {
           setError(toApiError(raw));
         }
       } finally {
-        if (run === generation.current && !silent) {
+        inFlightRef.current = false;
+        if (currentKeyRef.current === targetKey && !silent) {
           setLoading(false);
         }
       }
@@ -130,19 +140,29 @@ export function usePagedResource<T>(
     [api, enabled, path, paramsKey, cacheKey],
   );
 
-  useEffect(() => {
-    void fetchPage(null, false, Boolean(cached));
-  }, [fetchPage]);
-
-  // Realtime background refresh every 1 second (silent, no visible spinner)
+  // Background refresh sequenced with setTimeout so requests never race or overlap
   useEffect(() => {
     if (!enabled) {
       return;
     }
-    const timer = setInterval(() => {
-      void fetchPage(null, false, true);
-    }, 1000);
-    return () => clearInterval(timer);
+    let timerId: number | undefined;
+    let active = true;
+
+    async function poll() {
+      if (!active) return;
+      await fetchPage(null, false, true);
+      if (active) {
+        timerId = window.setTimeout(poll, 1000);
+      }
+    }
+
+    void fetchPage(null, false, Boolean(cached));
+    timerId = window.setTimeout(poll, 1000);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timerId);
+    };
   }, [enabled, fetchPage]);
 
   return {
@@ -181,7 +201,10 @@ export function useResource<T>(path: string | null): Resource<T> {
     setError(null);
   }
 
-  const generation = useRef(0);
+  const inFlightRef = useRef(false);
+  const currentPathRef = useRef(path);
+  currentPathRef.current = path;
+
   const dataRef = useRef(data);
   useEffect(() => {
     dataRef.current = data;
@@ -194,14 +217,18 @@ export function useResource<T>(path: string | null): Resource<T> {
         setLoading(false);
         return;
       }
-      const run = ++generation.current;
+      if (inFlightRef.current && silent) {
+        return;
+      }
+      const targetPath = path;
+      inFlightRef.current = true;
       if (!silent) {
         setLoading(true);
         setError(null);
       }
       try {
         const result = await api.get<T>(path);
-        if (run !== generation.current) {
+        if (currentPathRef.current !== targetPath) {
           return;
         }
         const currentStr = JSON.stringify(dataRef.current);
@@ -209,9 +236,10 @@ export function useResource<T>(path: string | null): Resource<T> {
         if (currentStr !== newStr) {
           setData(result);
         }
-        resourceCache.set(path, result);
+        resourceCache.set(targetPath, result);
+        setError(null);
       } catch (raw) {
-        if (run !== generation.current) {
+        if (currentPathRef.current !== targetPath) {
           return;
         }
         if (!silent) {
@@ -219,7 +247,8 @@ export function useResource<T>(path: string | null): Resource<T> {
           setData(null);
         }
       } finally {
-        if (run === generation.current && !silent) {
+        inFlightRef.current = false;
+        if (currentPathRef.current === targetPath && !silent) {
           setLoading(false);
         }
       }
@@ -227,19 +256,29 @@ export function useResource<T>(path: string | null): Resource<T> {
     [api, path],
   );
 
-  useEffect(() => {
-    void load(Boolean(cached));
-  }, [load]);
-
-  // Realtime background refresh every 1 second (silent, no visible spinner)
+  // Background refresh sequenced with setTimeout so requests never race or overlap
   useEffect(() => {
     if (!path) {
       return;
     }
-    const timer = setInterval(() => {
-      void load(true);
-    }, 1000);
-    return () => clearInterval(timer);
+    let timerId: number | undefined;
+    let active = true;
+
+    async function poll() {
+      if (!active) return;
+      await load(true);
+      if (active) {
+        timerId = window.setTimeout(poll, 1000);
+      }
+    }
+
+    void load(Boolean(cached));
+    timerId = window.setTimeout(poll, 1000);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timerId);
+    };
   }, [path, load]);
 
   return { data, loading, error, reload: () => load(false) };

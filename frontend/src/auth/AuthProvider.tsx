@@ -49,11 +49,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const bureauRef = useRef<string | null>(activeBureauId);
   bureauRef.current = activeBureauId;
 
+  const sessionRef = useRef<Session | null>(session);
+  sessionRef.current = session;
+
   const api = useMemo(
     () =>
       new ApiClient({
         baseUrl: apiBaseUrl,
         getAccessToken: async () => {
+          if (sessionRef.current?.access_token) {
+            return sessionRef.current.access_token;
+          }
           if (!supabase) {
             return null;
           }
