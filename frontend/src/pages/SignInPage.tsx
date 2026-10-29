@@ -47,20 +47,7 @@ export function SignInPage() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
-            <div
-              style={{
-                width: "48px",
-                overflow: "hidden",
-                height: "48px",
-                borderRadius: "var(--radius-lg)",
-                background: "rgba(255, 255, 255, 0.15)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <BrandLogo size={36} fallbackIconClass="w-7 h-7 text-white" />
-            </div>
+            <BrandLogo size={52} className="brand-standalone-logo" fallbackIconClass="w-8 h-8 text-white" />
             <div>
               <h1 style={{ color: "white", fontSize: "1.5rem", marginBottom: "0.25rem" }}>
                 AICTE OneDesk

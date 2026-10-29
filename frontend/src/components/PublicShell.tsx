@@ -14,9 +14,7 @@ export function PublicShell({ children }: { children: ReactNode }) {
     <div className="public-shell">
       <header className="public-header">
         <Link to="/demo" className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            <BrandLogo size={28} fallbackIconClass="w-5 h-5 text-white" />
-          </span>
+          <BrandLogo size={36} className="brand-standalone-logo" fallbackIconClass="w-8 h-8 text-emerald-800" />
           <span>
             <strong>AICTE OneDesk</strong>
             <small>Institution Complaint Management</small>

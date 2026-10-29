@@ -91,9 +91,7 @@ export function AppShell() {
           {/* Logo & Brand Header */}
           <div className="sidebar-header">
             <Link to="/" className="sidebar-brand">
-              <div className="brand-icon-box">
-                <BrandLogo size={28} fallbackIconClass="w-5 h-5 text-white" />
-              </div>
+              <BrandLogo size={42} className="brand-standalone-logo" fallbackIconClass="w-8 h-8 text-emerald-800" />
               <div className="brand-text-col">
                 <span className="brand-title">AICTE OneDesk</span>
                 <span className="brand-subtitle">Grievance Redressal</span>
