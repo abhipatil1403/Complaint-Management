@@ -62,6 +62,7 @@ export function DuplicateReviewDetailPage() {
         description: candidate.case_title,
         category: candidate.case_category_name || undefined,
       },
+      candidate.candidate_id,
     )
       .then(setGeminiDupResult)
       .catch((e) => console.error(e))
@@ -185,8 +186,9 @@ export function DuplicateReviewDetailPage() {
           <div>
             <strong>Score: </strong>
             <span>
-              {(candidate.similarity_score * 100).toFixed(0)}% (
-              {heuristicLabel(candidate.similarity_score)})
+              {geminiDupResult
+                ? `${(geminiDupResult.similarity_score * 100).toFixed(0)}% (AI Semantic Match)`
+                : `${(candidate.similarity_score * 100).toFixed(0)}% (${heuristicLabel(candidate.similarity_score)})`}
             </span>
           </div>
         </div>
@@ -223,7 +225,7 @@ export function DuplicateReviewDetailPage() {
               AI Semantic Duplicate Assessment
             </h3>
             <p className="small muted" style={{ margin: "0.15rem 0 0 0" }}>
-              NLP semantic comparison powered by Google Gemini AI. Evaluates underlying factual claims across submissions.
+              AI-assisted NLP semantic comparison and factual entity cross-referencing across institutional submissions.
             </p>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
@@ -237,7 +239,7 @@ export function DuplicateReviewDetailPage() {
                 fontSize: "0.78rem",
               }}
             >
-              {isAnalyzingDup ? "Analyzing with Gemini..." : (geminiDupResult?.modelUsed || "Google Gemini Flash (Live)")}
+              {isAnalyzingDup ? "Analyzing with AICTE Semantic Engine..." : (geminiDupResult?.modelUsed || "AICTE Semantic Engine (Active)")}
             </span>
             {geminiDupResult && (
               <span

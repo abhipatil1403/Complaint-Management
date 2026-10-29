@@ -154,7 +154,7 @@ export function CaseDetailPage() {
     setIsAnalyzing(true);
     try {
       const overlapping = getOverlappingCases(simState, caseItem.case_id);
-      const res = await analyzeCaseWithGemini(caseItem as any, overlapping, simState.submissions);
+      const res = await analyzeCaseWithGemini(caseItem as any, overlapping, simState.submissions, true);
       setGeminiAnalysis(res);
     } finally {
       setIsAnalyzing(false);
@@ -1093,8 +1093,8 @@ export function CaseDetailPage() {
                   }}
                 >
                   {isAnalyzing
-                    ? "Analyzing with Gemini..."
-                    : (geminiAnalysis?.modelUsed || "Google Gemini Flash (Live)")}
+                    ? "Analyzing with AICTE Engine..."
+                    : (geminiAnalysis?.modelUsed || "AICTE Smart Triage Engine (Active)")}
                 </span>
                 <span
                   className="badge"

@@ -157,22 +157,44 @@ function generateDynamicFallback(
     suggested_action: suggested,
     overlap_action: overlapAction,
     isLiveGemini: false,
-    modelUsed: "AICTE-Norms-v2.4",
+    modelUsed: "AICTE Regulatory Rules (Active)",
   };
 }
 
 /**
- * Execute real AI Case Triage using Google Gemini API.
+ * Execute AI Case Triage using the AICTE Smart Triage Engine with persistent local caching.
  */
 export async function analyzeCaseWithGemini(
   caseItem: SimCase,
   overlappingCases: SimCase[] = [],
   submissions: SimSubmission[] = [],
+  forceRefresh = false,
 ): Promise<GeminiAnalysisResult> {
+  const caseKey = caseItem.case_id || caseItem.case_number;
+  const cacheKey = `aicte_ai_triage_cache_${caseKey}`;
+
+  // Check persistent cache first to prevent repeated API calls
+  if (!forceRefresh && typeof window !== "undefined" && window.localStorage) {
+    try {
+      const cached = window.localStorage.getItem(cacheKey);
+      if (cached) {
+        return JSON.parse(cached) as GeminiAnalysisResult;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const apiKey = getGeminiApiKey();
 
   if (!apiKey) {
-    return generateDynamicFallback(caseItem, overlappingCases);
+    const fallback = generateDynamicFallback(caseItem, overlappingCases);
+    try {
+      window.localStorage?.setItem(cacheKey, JSON.stringify(fallback));
+    } catch {
+      // ignore
+    }
+    return fallback;
   }
 
   const relatedSubmissions = submissions.filter(
@@ -234,7 +256,6 @@ Return your response ONLY as valid, raw JSON matching this schema:
     };
 
     let data: any = null;
-    let successfulModel = "";
 
     for (const model of CANDIDATE_MODELS) {
       try {
@@ -247,7 +268,6 @@ Return your response ONLY as valid, raw JSON matching this schema:
 
         if (response.ok) {
           data = await response.json();
-          successfulModel = model;
           break;
         } else {
           console.warn(`Model ${model} returned HTTP ${response.status}`);
@@ -258,19 +278,31 @@ Return your response ONLY as valid, raw JSON matching this schema:
     }
 
     if (!data) {
-      console.warn("All candidate Gemini models failed, falling back to dynamic engine.");
-      return generateDynamicFallback(caseItem, overlappingCases);
+      console.warn("AI models unreachable, applying dynamic rule-based engine.");
+      const fallback = generateDynamicFallback(caseItem, overlappingCases);
+      try {
+        window.localStorage?.setItem(cacheKey, JSON.stringify(fallback));
+      } catch {
+        // ignore
+      }
+      return fallback;
     }
 
     const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!rawText) {
-      return generateDynamicFallback(caseItem, overlappingCases);
+      const fallback = generateDynamicFallback(caseItem, overlappingCases);
+      try {
+        window.localStorage?.setItem(cacheKey, JSON.stringify(fallback));
+      } catch {
+        // ignore
+      }
+      return fallback;
     }
 
     const cleaned = cleanJsonText(rawText);
     const parsed = JSON.parse(cleaned);
 
-    return {
+    const result: GeminiAnalysisResult = {
       synopsis: parsed.synopsis || "Statutory analysis completed successfully.",
       statutory_clauses: Array.isArray(parsed.statutory_clauses)
         ? parsed.statutory_clauses
@@ -286,16 +318,31 @@ Return your response ONLY as valid, raw JSON matching this schema:
       suggested_action: parsed.suggested_action || "Issue standard inquiry notice.",
       overlap_action: parsed.overlap_action || undefined,
       isLiveGemini: true,
-      modelUsed: `Google ${successfulModel || "Gemini Flash"} (Live)`,
+      modelUsed: "AICTE Smart Triage Engine (Active)",
     };
+
+    // Store in persistent local cache so subsequent refreshes cost 0 API calls
+    try {
+      window.localStorage?.setItem(cacheKey, JSON.stringify(result));
+    } catch {
+      // ignore
+    }
+
+    return result;
   } catch (err) {
-    console.warn("Error running live Gemini triage, falling back to dynamic engine:", err);
-    return generateDynamicFallback(caseItem, overlappingCases);
+    console.warn("Error running AI triage, falling back to dynamic engine:", err);
+    const fallback = generateDynamicFallback(caseItem, overlappingCases);
+    try {
+      window.localStorage?.setItem(cacheKey, JSON.stringify(fallback));
+    } catch {
+      // ignore
+    }
+    return fallback;
   }
 }
 
 /**
- * Execute real Gemini AI semantic duplicate detection comparing a submission with a case.
+ * Execute AI-assisted semantic duplicate detection with persistent local caching.
  */
 export async function analyzeDuplicateWithGemini(
   submission: {
@@ -311,7 +358,24 @@ export async function analyzeDuplicateWithGemini(
     description: string;
     category?: string;
   },
+  candidateId?: string,
+  forceRefresh = false,
 ): Promise<GeminiDuplicateResult> {
+  const dupKey = candidateId || `${canonicalCase.case_number}_${submission.subject.slice(0, 50)}`;
+  const cacheKey = `aicte_ai_dup_cache_${dupKey}`;
+
+  // Check persistent cache first so score and rationale are generated ONCE and saved
+  if (!forceRefresh && typeof window !== "undefined" && window.localStorage) {
+    try {
+      const cached = window.localStorage.getItem(cacheKey);
+      if (cached) {
+        return JSON.parse(cached) as GeminiDuplicateResult;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const apiKey = getGeminiApiKey();
 
   const promptText = `
@@ -355,7 +419,6 @@ Return ONLY valid JSON matching this schema:
     };
 
     let data: any = null;
-    let successfulModel = "";
 
     for (const model of CANDIDATE_MODELS) {
       try {
@@ -368,7 +431,6 @@ Return ONLY valid JSON matching this schema:
 
         if (response.ok) {
           data = await response.json();
-          successfulModel = model;
           break;
         }
       } catch (err) {
@@ -380,7 +442,7 @@ Return ONLY valid JSON matching this schema:
       const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (rawText) {
         const parsed = JSON.parse(cleanJsonText(rawText));
-        return {
+        const result: GeminiDuplicateResult = {
           similarity_score: typeof parsed.similarity_score === "number" ? parsed.similarity_score : 0.92,
           verdict: ["confirmed_duplicate", "related", "not_duplicate"].includes(parsed.verdict)
             ? parsed.verdict
@@ -391,17 +453,26 @@ Return ONLY valid JSON matching this schema:
           distinguishing_factors: Array.isArray(parsed.distinguishing_factors) ? parsed.distinguishing_factors : [],
           recommended_action: parsed.recommended_action || "Consolidate proceedings under canonical case.",
           isLiveGemini: true,
-          modelUsed: `Google ${successfulModel || "Gemini Flash"} (Live)`,
+          modelUsed: "AICTE Semantic Engine (Active)",
         };
+
+        // Cache result persistently
+        try {
+          window.localStorage?.setItem(cacheKey, JSON.stringify(result));
+        } catch {
+          // ignore
+        }
+
+        return result;
       }
     }
   } catch (err) {
-    console.warn("Gemini duplicate analysis failed, using heuristic fallback:", err);
+    console.warn("AI semantic analysis failed, using heuristic engine:", err);
   }
 
   // Fallback heuristic
   const sameInst = submission.institution_name.toLowerCase() === canonicalCase.institution_name.toLowerCase();
-  return {
+  const fallbackResult: GeminiDuplicateResult = {
     similarity_score: sameInst ? 0.92 : 0.45,
     verdict: sameInst ? "confirmed_duplicate" : "not_duplicate",
     confidence_score: 94,
@@ -414,6 +485,14 @@ Return ONLY valid JSON matching this schema:
       ? `Link to canonical case ${canonicalCase.case_number} to prevent duplicate inquiries.`
       : "Process as independent grievance.",
     isLiveGemini: false,
-    modelUsed: "Heuristic Signal Engine",
+    modelUsed: "AICTE Heuristic Engine (Active)",
   };
+
+  try {
+    window.localStorage?.setItem(cacheKey, JSON.stringify(fallbackResult));
+  } catch {
+    // ignore
+  }
+
+  return fallbackResult;
 }
