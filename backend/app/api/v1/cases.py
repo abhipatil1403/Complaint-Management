@@ -53,14 +53,22 @@ operations_router = APIRouter(tags=["case-operations"])
 async def list_cases(
     ctx: RequestContext = Depends(require_any_permission(perms.CASE_VIEW_INDEX, perms.CASE_VIEW_DETAIL)),
     status_filter: str | None = Query(default=None, alias="status"),
-    q: str | None = Query(default=None, alias="search", max_length=120),
+    search: str | None = Query(default=None, alias="search", max_length=120),
+    q: str | None = Query(default=None, alias="q", max_length=120),
+    cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> list[CaseIndexItem]:
+    search_query = (search.strip() if search and search.strip() else None) or (q.strip() if q and q.strip() else None)
+    if cursor:
+        try:
+            offset = int(cursor)
+        except (ValueError, TypeError):
+            pass
     rows = await repo.list_cases(
         ctx.conn,
         status=status_filter,
-        search=q,
+        search=search_query,
         limit=limit,
         offset=offset,
     )

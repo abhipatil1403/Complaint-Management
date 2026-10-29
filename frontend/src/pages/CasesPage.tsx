@@ -54,7 +54,7 @@ export function CasesPage() {
     "/cases",
     {
       status: statusFilter === "all" ? undefined : statusFilter,
-      q: searchQuery.trim() || undefined,
+      search: searchQuery.trim() || undefined,
     },
     { enabled: has("case.view_index") || has("case.view_detail") },
   );

@@ -85,7 +85,7 @@ export function usePagedResource<T>(
           ? 25
           : Math.min(Math.max(itemsRef.current.length, 25), 100);
 
-        const page = await api.get<Page<T>>(path, {
+        const rawPage = await api.get<Page<T> | T[]>(path, {
           ...params,
           cursor: nextCursor ?? undefined,
           limit: fetchLimit,
@@ -96,31 +96,42 @@ export function usePagedResource<T>(
           return;
         }
 
+        // Support both enveloped { data: T[], page: { next_cursor: ... } } and raw array T[]
+        const pageData: T[] = Array.isArray(rawPage)
+          ? rawPage
+          : Array.isArray((rawPage as Page<T>)?.data)
+            ? (rawPage as Page<T>).data
+            : [];
+
+        const nextCursorVal: string | null = Array.isArray(rawPage)
+          ? null
+          : ((rawPage as Page<T>)?.page?.next_cursor ?? null);
+
         // Pre-populate individual detail items into resourceCache so navigating to any detail page is instant
         const cleanPath = path.split("?")[0].replace(/\/+$/, "");
-        for (const rawItem of page.data) {
-          if (
-            rawItem &&
-            typeof rawItem === "object" &&
-            "id" in rawItem &&
-            typeof (rawItem as { id: unknown }).id === "string"
-          ) {
-            const itemId = (rawItem as { id: string }).id;
-            resourceCache.set(`${cleanPath}/${itemId}`, rawItem);
+        for (const rawItem of pageData) {
+          if (rawItem && typeof rawItem === "object") {
+            const itemObj = rawItem as Record<string, unknown>;
+            const itemId =
+              (typeof itemObj.id === "string" && itemObj.id) ||
+              (typeof itemObj.case_id === "string" && itemObj.case_id);
+            if (itemId) {
+              resourceCache.set(`${cleanPath}/${itemId}`, rawItem);
+            }
           }
         }
 
         if (append) {
-          setItems((prev) => [...prev, ...page.data]);
-          setCursor(page.page.next_cursor);
+          setItems((prev) => [...prev, ...pageData]);
+          setCursor(nextCursorVal);
         } else {
           const currentStr = JSON.stringify(itemsRef.current);
-          const newStr = JSON.stringify(page.data);
+          const newStr = JSON.stringify(pageData);
           if (currentStr !== newStr) {
-            setItems(page.data);
+            setItems(pageData);
           }
-          setCursor(page.page.next_cursor);
-          pagedCache.set(targetKey, { items: page.data, cursor: page.page.next_cursor });
+          setCursor(nextCursorVal);
+          pagedCache.set(targetKey, { items: pageData, cursor: nextCursorVal });
         }
         setError(null);
       } catch (raw) {
