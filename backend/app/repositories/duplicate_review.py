@@ -125,7 +125,10 @@ async def screen_submission(
                 },
             )
             row = await cur.fetchone()
-            return row[0] if row else 0
+            if not row:
+                return 0
+            val = next(iter(row.values())) if isinstance(row, dict) else row[0]
+            return int(val) if val is not None else 0
     except psycopg.Error as exc:
         raise _translate(exc) from exc
 

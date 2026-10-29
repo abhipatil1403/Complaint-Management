@@ -241,10 +241,158 @@ PHASE2_DUPLICATE_ROLE_GRANTS: dict[str, tuple[str, ...]] = {
 }
 
 
+# --- Phase 3 & 4 Operations and Cross-Bureau Controls Capabilities ---
+CASE_STATUS_CHANGE = "case.status.change"
+CASE_HISTORY_VIEW = "case.history.view"
+CASE_NOTE_VIEW = "case.note.view"
+CASE_NOTE_CREATE = "case.note.create"
+CASE_NOTE_EDIT = "case.note.edit"
+CASE_ASSIGN_BUREAU = "case.assign.bureau"
+CASE_ASSIGN_OFFICER = "case.assign.officer"
+ATTACHMENT_UPLOAD = "attachment.upload"
+ATTACHMENT_VIEW = "attachment.view"
+ATTACHMENT_DOWNLOAD = "attachment.download"
+ATTACHMENT_QUARANTINE = "attachment.quarantine"
+CASE_TRANSFER_REQUEST = "case.transfer.request"
+CASE_TRANSFER_DECIDE = "case.transfer.decide"
+CASE_ACCESS_REQUEST = "case.access.request"
+CASE_ACCESS_REVIEW = "case.access.review"
+CASE_ACCESS_APPROVE = "case.access.approve"
+CASE_ACCESS_MANAGE = "case.access.manage"
+CASE_ACCESS_REVOKE = "case.access.revoke"
+
+PHASE3_PHASE4_PERMISSIONS: dict[str, dict[str, str]] = {
+    CASE_STATUS_CHANGE: {
+        "name": "Change case status and lifecycle state",
+        "resource_type": "cases",
+        "action_type": "status.change",
+    },
+    CASE_HISTORY_VIEW: {
+        "name": "View case action history and audit events",
+        "resource_type": "cases",
+        "action_type": "history.view",
+    },
+    CASE_NOTE_VIEW: {
+        "name": "View internal case notes",
+        "resource_type": "case_notes",
+        "action_type": "view",
+    },
+    CASE_NOTE_CREATE: {
+        "name": "Create shared or bureau-private case notes",
+        "resource_type": "case_notes",
+        "action_type": "create",
+    },
+    CASE_NOTE_EDIT: {
+        "name": "Edit or soft-delete authorized case notes",
+        "resource_type": "case_notes",
+        "action_type": "edit",
+    },
+    CASE_ASSIGN_BUREAU: {
+        "name": "Assign or manage bureau participation",
+        "resource_type": "case_bureau_assignments",
+        "action_type": "assign",
+    },
+    CASE_ASSIGN_OFFICER: {
+        "name": "Assign or manage officer roles",
+        "resource_type": "case_officer_assignments",
+        "action_type": "assign",
+    },
+    ATTACHMENT_UPLOAD: {
+        "name": "Upload evidence and case attachments",
+        "resource_type": "attachments",
+        "action_type": "upload",
+    },
+    ATTACHMENT_VIEW: {
+        "name": "View attachment metadata and scan status",
+        "resource_type": "attachments",
+        "action_type": "view",
+    },
+    ATTACHMENT_DOWNLOAD: {
+        "name": "Generate short-lived signed download capability",
+        "resource_type": "attachments",
+        "action_type": "download",
+    },
+    ATTACHMENT_QUARANTINE: {
+        "name": "Quarantine suspicious attachments",
+        "resource_type": "attachments",
+        "action_type": "quarantine",
+    },
+    CASE_TRANSFER_REQUEST: {
+        "name": "Request inter-bureau case transfer",
+        "resource_type": "case_transfers",
+        "action_type": "request",
+    },
+    CASE_TRANSFER_DECIDE: {
+        "name": "Approve, reject, or cancel case transfers",
+        "resource_type": "case_transfers",
+        "action_type": "decide",
+    },
+    CASE_ACCESS_REQUEST: {
+        "name": "Request cross-bureau restricted case access",
+        "resource_type": "case_access_requests",
+        "action_type": "request",
+    },
+    CASE_ACCESS_REVIEW: {
+        "name": "View pending cross-bureau access requests",
+        "resource_type": "case_access_requests",
+        "action_type": "review",
+    },
+    CASE_ACCESS_APPROVE: {
+        "name": "Approve or deny cross-bureau access requests",
+        "resource_type": "case_access_requests",
+        "action_type": "approve",
+    },
+    CASE_ACCESS_MANAGE: {
+        "name": "View and manage active case access grants",
+        "resource_type": "case_access_grants",
+        "action_type": "manage",
+    },
+    CASE_ACCESS_REVOKE: {
+        "name": "Revoke active cross-bureau access grants",
+        "resource_type": "case_access_grants",
+        "action_type": "revoke",
+    },
+}
+
+PHASE3_PHASE4_ROLE_GRANTS: dict[str, tuple[str, ...]] = {
+    SUPER_ADMIN: (
+        CASE_STATUS_CHANGE, CASE_HISTORY_VIEW, CASE_NOTE_VIEW, CASE_NOTE_CREATE,
+        CASE_NOTE_EDIT, CASE_ASSIGN_BUREAU, CASE_ASSIGN_OFFICER, ATTACHMENT_UPLOAD,
+        ATTACHMENT_VIEW, ATTACHMENT_DOWNLOAD, ATTACHMENT_QUARANTINE, CASE_TRANSFER_REQUEST,
+        CASE_TRANSFER_DECIDE, CASE_ACCESS_REQUEST, CASE_ACCESS_REVIEW, CASE_ACCESS_APPROVE,
+        CASE_ACCESS_MANAGE, CASE_ACCESS_REVOKE,
+    ),
+    BUREAU_ADMIN: (
+        CASE_STATUS_CHANGE, CASE_HISTORY_VIEW, CASE_NOTE_VIEW, CASE_NOTE_CREATE,
+        CASE_NOTE_EDIT, CASE_ASSIGN_BUREAU, CASE_ASSIGN_OFFICER, ATTACHMENT_UPLOAD,
+        ATTACHMENT_VIEW, ATTACHMENT_DOWNLOAD, CASE_TRANSFER_REQUEST, CASE_TRANSFER_DECIDE,
+        CASE_ACCESS_REQUEST, CASE_ACCESS_REVIEW, CASE_ACCESS_APPROVE, CASE_ACCESS_MANAGE,
+        CASE_ACCESS_REVOKE,
+    ),
+    CASE_OFFICER: (
+        CASE_STATUS_CHANGE, CASE_HISTORY_VIEW, CASE_NOTE_VIEW, CASE_NOTE_CREATE,
+        CASE_NOTE_EDIT, CASE_ASSIGN_OFFICER, ATTACHMENT_UPLOAD, ATTACHMENT_VIEW,
+        ATTACHMENT_DOWNLOAD, CASE_TRANSFER_REQUEST, CASE_ACCESS_REQUEST,
+    ),
+    CROSS_BUREAU_COLLABORATOR: (
+        CASE_HISTORY_VIEW, CASE_NOTE_VIEW, CASE_NOTE_CREATE, ATTACHMENT_VIEW,
+        ATTACHMENT_DOWNLOAD, CASE_ACCESS_REQUEST,
+    ),
+    SENIOR_MANAGEMENT: (
+        CASE_HISTORY_VIEW, CASE_NOTE_VIEW, ATTACHMENT_VIEW, ATTACHMENT_DOWNLOAD,
+        CASE_ACCESS_REVIEW, CASE_ACCESS_APPROVE, CASE_ACCESS_MANAGE,
+    ),
+    AUDITOR: (
+        CASE_HISTORY_VIEW, CASE_NOTE_VIEW, ATTACHMENT_VIEW,
+    ),
+}
+
+
 def to_db_code(api_code: str) -> str:
     return api_code.strip().upper()
 
 
 def to_api_code(db_code: str) -> str:
     return db_code.strip().lower()
+
 

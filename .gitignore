@@ -19,6 +19,9 @@ supabase/config.local.toml
 *.pgpass
 .pgpass
 
+# External design references
+reference/
+
 # ---------------------------------------------------------------------------
 # Node / frontend
 # ---------------------------------------------------------------------------

@@ -307,6 +307,7 @@ def test_me_reports_global_permissions_for_a_global_role(client) -> None:
         | set(perms.PHASE2_ROLE_GRANTS[perms.SUPER_ADMIN])
         | set(perms.PHASE2_VERIFICATION_ROLE_GRANTS[perms.SUPER_ADMIN])
         | set(perms.PHASE2_DUPLICATE_ROLE_GRANTS[perms.SUPER_ADMIN])
+        | set(perms.PHASE3_PHASE4_ROLE_GRANTS[perms.SUPER_ADMIN])
     )
     assert perms.SUBMISSION_VIEW in body["permissions"]
     assert perms.INSTITUTION_VERIFY in body["permissions"]

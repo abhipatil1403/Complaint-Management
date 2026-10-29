@@ -49,7 +49,7 @@ export function toApiError(error: unknown): ApiError {
 export type QueryParams = Record<string, string | number | boolean | null | undefined>;
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: unknown;
   signal?: AbortSignal;
   /** Explicit override: undefined uses the active bureau, null omits the header. */
@@ -98,6 +98,10 @@ export class ApiClient {
 
   patch<T>(path: string, body?: unknown, bureauId?: string | null): Promise<T> {
     return this.request<T>(path, { method: "PATCH", body, bureauId });
+  }
+
+  delete<T>(path: string, bureauId?: string | null): Promise<T> {
+    return this.request<T>(path, { method: "DELETE", bureauId });
   }
 
   private async request<T>(path: string, options: RequestOptions = {}): Promise<T> {

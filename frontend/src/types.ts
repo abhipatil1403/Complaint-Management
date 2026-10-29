@@ -502,6 +502,17 @@ export interface CaseActionHistoryItem {
   metadata: Record<string, unknown>;
 }
 
+export interface OfficerAssignmentItem {
+  officer_assignment_id: string;
+  case_bureau_assignment_id: string;
+  bureau_name: string;
+  officer_user_id: string;
+  officer_name: string;
+  role: "lead_officer" | "supporting" | "reviewer" | string;
+  status: "pending" | "active" | "completed" | "revoked" | string;
+  assigned_at: string;
+}
+
 export interface CaseDetail {
   case_id: string;
   case_number: string;
@@ -525,8 +536,11 @@ export interface CaseDetail {
   lead_bureau_name: string | null;
   lead_bureau_code: string | null;
   collaborating_bureaus: CollaboratingBureau[];
+  officer_assignments?: OfficerAssignmentItem[];
   related_cases: RelatedCaseItem[];
   action_history: CaseActionHistoryItem[];
+  notes_count?: number;
+  attachments_count?: number;
 }
 
 export interface CaseCreateRequest {
@@ -538,4 +552,172 @@ export interface CaseCreateRequest {
   visibility?: CaseVisibility;
   expected_submission_updated_at: string;
 }
+
+export interface CaseStatusTransitionPayload {
+  to_status: string;
+  reason: string;
+  expected_updated_at?: string | null;
+}
+
+export interface CaseBureauAssignPayload {
+  bureau_id: string;
+  assignment_type: "lead" | "collaborating";
+  reason?: string;
+}
+
+export interface CaseBureauAssignUpdatePayload {
+  status: "active" | "completed" | "cancelled";
+  completion_notes?: string;
+}
+
+export interface CaseOfficerAssignPayload {
+  officer_user_id: string;
+  role: "lead_officer" | "supporting" | "reviewer";
+  notes?: string;
+}
+
+export interface CaseOfficerAssignUpdatePayload {
+  status: "active" | "completed" | "revoked";
+  notes?: string;
+}
+
+export interface CaseNoteItem {
+  note_id: string;
+  case_id: string;
+  author_user_id: string;
+  author_name: string;
+  bureau_id: string | null;
+  bureau_name: string | null;
+  bureau_code: string | null;
+  note_text: string;
+  visibility: "shared" | "bureau_private";
+  note_type: "general" | "internal_review" | "resolution" | "handover";
+  is_pinned: boolean;
+  edited_at: string | null;
+  created_at: string;
+}
+
+export interface CaseNoteCreatePayload {
+  note_text: string;
+  visibility: "shared" | "bureau_private";
+  note_type: "general" | "internal_review" | "resolution" | "handover";
+  bureau_id?: string | null;
+  is_pinned?: boolean;
+}
+
+export interface CaseNoteUpdatePayload {
+  note_text: string;
+  is_pinned?: boolean;
+}
+
+export interface CaseAttachmentItem {
+  attachment_id: string;
+  case_id: string | null;
+  submission_id: string | null;
+  uploaded_by_user_id: string | null;
+  uploader_name: string | null;
+  original_filename: string;
+  storage_bucket: string;
+  storage_path: string;
+  mime_type: string;
+  file_size_bytes: number;
+  sha256_checksum: string | null;
+  attachment_type: string;
+  upload_status: string;
+  description: string | null;
+  uploaded_at: string;
+  verified_at: string | null;
+}
+
+export interface CaseAttachmentRegisterPayload {
+  original_filename: string;
+  storage_bucket?: string;
+  storage_path: string;
+  mime_type: string;
+  file_size_bytes: number;
+  sha256_checksum?: string;
+  attachment_type?: string;
+  description?: string;
+}
+
+export interface CaseTransferItem {
+  transfer_id: string;
+  case_id: string;
+  from_bureau_assignment_id: string | null;
+  to_bureau_assignment_id: string | null;
+  transfer_type: "handover" | "lead_change" | "reassignment" | string;
+  transfer_status: "pending" | "approved" | "rejected" | "completed" | "cancelled" | string;
+  transfer_reason: string;
+  initiated_by_user_id: string;
+  initiated_at: string;
+  decided_by_user_id: string | null;
+  decided_at: string | null;
+  completed_at: string | null;
+  decision_notes: string | null;
+}
+
+export interface CaseTransferRequestPayload {
+  from_bureau_assignment_id: string;
+  to_bureau_id: string;
+  transfer_type: "handover" | "lead_change" | "reassignment";
+  reason: string;
+}
+
+export interface CaseTransferDecisionPayload {
+  decision: "approved" | "rejected" | "cancelled";
+  decision_notes?: string;
+}
+
+export interface CaseAccessRequestItem {
+  request_id: string;
+  case_id: string;
+  case_number: string;
+  institution_name: string;
+  requester_user_id: string;
+  requester_name: string;
+  requesting_bureau_id: string | null;
+  requesting_bureau_name: string | null;
+  requested_access_level: "details" | "collaborate" | string;
+  request_reason: string;
+  request_status: "pending" | "approved" | "rejected" | "cancelled" | string;
+  requested_at: string;
+  reviewed_by_user_id: string | null;
+  reviewed_at: string | null;
+  decision_reason: string | null;
+}
+
+export interface CaseAccessRequestPayload {
+  access_level: "details" | "collaborate";
+  reason: string;
+  requesting_bureau_id?: string | null;
+}
+
+export interface CaseAccessRequestDecisionPayload {
+  decision: "approved" | "rejected";
+  decision_reason: string;
+  expires_at?: string | null;
+}
+
+export interface CaseAccessGrantItem {
+  grant_id: string;
+  case_id: string;
+  grantee_user_id: string;
+  grantee_name: string;
+  access_request_id: string | null;
+  access_level: string;
+  grant_reason: string;
+  granted_by_user_id: string;
+  granted_by_name: string;
+  granted_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  revoked_by_user_id: string | null;
+  revocation_reason: string | null;
+  is_active: boolean;
+}
+
+export interface CaseAccessGrantRevokePayload {
+  revocation_reason: string;
+}
+
 

@@ -44,6 +44,7 @@ SUPER_PERMISSIONS = (
     | frozenset(perms.PHASE2_ROLE_GRANTS[perms.SUPER_ADMIN])
     | frozenset(perms.PHASE2_VERIFICATION_ROLE_GRANTS[perms.SUPER_ADMIN])
     | frozenset(perms.PHASE2_DUPLICATE_ROLE_GRANTS[perms.SUPER_ADMIN])
+    | frozenset(perms.PHASE3_PHASE4_ROLE_GRANTS[perms.SUPER_ADMIN])
 )
 
 
@@ -56,6 +57,8 @@ def role_permissions(role_code: str) -> frozenset[str]:
         base.update(perms.PHASE2_VERIFICATION_ROLE_GRANTS[role_code])
     if role_code in perms.PHASE2_DUPLICATE_ROLE_GRANTS:
         base.update(perms.PHASE2_DUPLICATE_ROLE_GRANTS[role_code])
+    if role_code in perms.PHASE3_PHASE4_ROLE_GRANTS:
+        base.update(perms.PHASE3_PHASE4_ROLE_GRANTS[role_code])
     return frozenset(base)
 
 

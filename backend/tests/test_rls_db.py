@@ -1190,7 +1190,10 @@ def test_public_intake_preserves_the_original_submission(conn) -> None:
         cases_after = conn.execute("select count(*) as total from public.cases").fetchone()["total"]
         assert cases_after == cases_before
         for table in ("duplicate_candidates", "attachments"):
-            total = conn.execute(f'select count(*) as total from public."{table}"').fetchone()["total"]
+            total = conn.execute(
+                f'select count(*) as total from public."{table}" where submission_id = %s',
+                (result["submission_id"],),
+            ).fetchone()["total"]
             assert total == 0, table
 
         conn.execute("reset role")

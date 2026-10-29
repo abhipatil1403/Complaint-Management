@@ -13,19 +13,32 @@ import type { CaseIndexItem, CasePriority } from "../types";
 import { PermissionDeniedPage } from "./PermissionDeniedPage";
 
 const STATUS_FILTERS = [
-  { value: "all", label: "All Cases" },
+  { value: "all", label: "All Statuses" },
   { value: "new", label: "New" },
-  { value: "open", label: "Open" },
   { value: "under_review", label: "Under Review" },
-  { value: "escalated", label: "Escalated" },
+  { value: "assigned", label: "Assigned" },
+  { value: "in_progress", label: "In Progress" },
+  { value: "awaiting_information", label: "Awaiting Information" },
   { value: "resolved", label: "Resolved" },
   { value: "closed", label: "Closed" },
+  { value: "reopened", label: "Reopened" },
+];
+
+const KANBAN_COLUMNS = [
+  { id: "new", title: "New" },
+  { id: "under_review", title: "Under Review" },
+  { id: "assigned", title: "Assigned" },
+  { id: "in_progress", title: "In Progress" },
+  { id: "awaiting_information", title: "Awaiting Info" },
+  { id: "resolved", title: "Resolved" },
+  { id: "closed", title: "Closed" },
 ];
 
 export function CasesPage() {
   const { has, api } = useAuth();
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
 
   // Create Case Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -87,7 +100,23 @@ export function CasesPage() {
         title="AICTE Canonical Cases"
         description="Cross-bureau complaint monitoring index. Full complaint details are restricted to authorized bureaus."
         actions={
-          <div style={{ display: "flex", gap: "0.5rem" }}>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <div style={{ display: "flex", border: "1px solid var(--color-border)", borderRadius: "4px", overflow: "hidden" }}>
+              <button
+                type="button"
+                className={`button button-small ${viewMode === "table" ? "button-primary" : "button-quiet"}`}
+                onClick={() => setViewMode("table")}
+              >
+                Table View
+              </button>
+              <button
+                type="button"
+                className={`button button-small ${viewMode === "kanban" ? "button-primary" : "button-quiet"}`}
+                onClick={() => setViewMode("kanban")}
+              >
+                Kanban View
+              </button>
+            </div>
             <button type="button" className="button button-quiet" onClick={() => void reload()}>
               Refresh
             </button>
@@ -106,7 +135,7 @@ export function CasesPage() {
 
       <div className="card">
         <div className="toolbar toolbar-wrap">
-          <h2>Case Index</h2>
+          <h2>Case Directory</h2>
           <label>
             Status
             <select
@@ -142,7 +171,8 @@ export function CasesPage() {
           />
         )}
 
-        {!loading && !error && items.length > 0 && (
+        {/* Table View */}
+        {!loading && !error && items.length > 0 && viewMode === "table" && (
           <div className="table-responsive">
             <table className="table">
               <thead>
@@ -181,13 +211,83 @@ export function CasesPage() {
                     <td>{formatDateTime(c.opened_at)}</td>
                     <td>
                       <Link to={`/cases/${c.case_id}`} className="button button-small">
-                        View
+                        {c.can_view_details ? "View Details" : "Request Access"}
                       </Link>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Kanban Board View */}
+        {!loading && !error && items.length > 0 && viewMode === "kanban" && (
+          <div style={{ display: "flex", gap: "1rem", overflowX: "auto", paddingBottom: "1rem", marginTop: "1rem" }}>
+            {KANBAN_COLUMNS.map((col) => {
+              const colCases = items.filter((c) => c.status === col.id);
+              return (
+                <div
+                  key={col.id}
+                  style={{
+                    minWidth: "260px",
+                    maxWidth: "300px",
+                    background: "var(--color-surface-subtle, rgba(0,0,0,0.02))",
+                    borderRadius: "6px",
+                    padding: "0.75rem",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.75rem",
+                    border: "1px solid var(--color-border)",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <h3 style={{ margin: 0, fontSize: "0.95rem" }}>{col.title}</h3>
+                    <span className="badge" style={{ fontSize: "0.8rem", padding: "0.1rem 0.5rem" }}>
+                      {colCases.length}
+                    </span>
+                  </div>
+
+                  {colCases.length === 0 ? (
+                    <div className="hint" style={{ fontSize: "0.85rem", textAlign: "center", padding: "1rem 0" }}>
+                      No cases in this stage
+                    </div>
+                  ) : (
+                    colCases.map((c) => (
+                      <div
+                        key={c.case_id}
+                        style={{
+                          background: "var(--color-surface)",
+                          borderRadius: "4px",
+                          padding: "0.75rem",
+                          border: "1px solid var(--color-border)",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "0.5rem",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                          <strong>{c.case_number}</strong>
+                          <StatusBadge value={c.priority} label={severityLabel(c.priority)} />
+                        </div>
+                        <div style={{ fontSize: "0.85rem", fontWeight: 500 }}>
+                          {c.institution_name}
+                        </div>
+                        <div className="hint" style={{ fontSize: "0.8rem" }}>
+                          Bureau: {c.lead_bureau_code || "Unassigned"}
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.25rem" }}>
+                          <Link to={`/cases/${c.case_id}`} className="button button-small" style={{ fontSize: "0.8rem" }}>
+                            {c.can_view_details ? "View" : "Request"}
+                          </Link>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -201,17 +301,17 @@ export function CasesPage() {
             left: 0,
             right: 0,
             bottom: 0,
-            background: "rgba(0,0,0,0.5)",
+            backgroundColor: "rgba(0, 0, 0, 0.5)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             zIndex: 1000,
           }}
         >
-          <div className="card" style={{ maxWidth: "600px", width: "90%", background: "#fff", maxHeight: "90vh", overflowY: "auto" }}>
+          <div className="card" style={{ maxWidth: "500px", width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
             <h3>Create Canonical Case</h3>
             <p className="hint">
-              Convert a verified, screened intake submission into a canonical AICTE case with monotonic numbering.
+              Initialize a canonical case from an authorized screened submission.
             </p>
 
             {createError && (
@@ -221,69 +321,64 @@ export function CasesPage() {
             )}
 
             <form onSubmit={handleCreateCase}>
-              <div style={{ marginBottom: "0.75rem" }}>
-                <label>Source Submission UUID *</label>
+              <label>
+                Source Submission ID
                 <input
-                  required
                   type="text"
-                  placeholder="Submission UUID (must be verified & screened)"
+                  required
+                  placeholder="UUID of screened submission"
                   value={sourceSubmissionId}
                   onChange={(e) => setSourceSubmissionId(e.target.value)}
-                  style={{ width: "100%", marginTop: "0.25rem" }}
                 />
-              </div>
+              </label>
 
-              <div style={{ marginBottom: "0.75rem" }}>
-                <label>Lead Bureau UUID *</label>
+              <label>
+                Lead Bureau ID
                 <input
-                  required
                   type="text"
-                  placeholder="Assigned lead bureau UUID"
+                  required
+                  placeholder="UUID of lead bureau"
                   value={primaryBureauId}
                   onChange={(e) => setPrimaryBureauId(e.target.value)}
-                  style={{ width: "100%", marginTop: "0.25rem" }}
                 />
-              </div>
+              </label>
 
-              <div style={{ marginBottom: "0.75rem" }}>
-                <label>Case Title *</label>
+              <label>
+                Case Title
                 <input
-                  required
                   type="text"
-                  placeholder="Summary of the complaint issue"
+                  required
+                  placeholder="Concise summary title"
                   value={caseTitle}
                   onChange={(e) => setCaseTitle(e.target.value)}
-                  style={{ width: "100%", marginTop: "0.25rem" }}
                 />
-              </div>
+              </label>
 
-              <div style={{ marginBottom: "0.75rem" }}>
-                <label>Priority *</label>
+              <label>
+                Case Description
+                <textarea
+                  rows={4}
+                  required
+                  placeholder="Comprehensive case notes and facts"
+                  value={caseDescription}
+                  onChange={(e) => setCaseDescription(e.target.value)}
+                />
+              </label>
+
+              <label>
+                Priority
                 <select
                   value={priority}
                   onChange={(e) => setPriority(e.target.value as CasePriority)}
-                  style={{ width: "100%", marginTop: "0.25rem" }}
                 >
                   <option value="low">Low</option>
                   <option value="normal">Normal</option>
                   <option value="high">High</option>
                   <option value="critical">Critical</option>
                 </select>
-              </div>
+              </label>
 
-              <div style={{ marginBottom: "1rem" }}>
-                <label>Description *</label>
-                <textarea
-                  required
-                  rows={4}
-                  placeholder="Detailed description of the case..."
-                  value={caseDescription}
-                  onChange={(e) => setCaseDescription(e.target.value)}
-                  style={{ width: "100%", marginTop: "0.25rem" }}
-                />
-              </div>
-
-              <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
                 <button
                   type="button"
                   className="button button-quiet"
