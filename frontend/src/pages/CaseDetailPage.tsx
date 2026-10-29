@@ -12,8 +12,6 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import {
   analyzeCaseWithGemini,
-  getGeminiApiKey,
-  setGeminiApiKey,
   hasGeminiApiKey,
   type GeminiAnalysisResult,
 } from "../lib/gemini";
@@ -142,9 +140,6 @@ export function CaseDetailPage() {
   // Gemini AI States
   const [geminiAnalysis, setGeminiAnalysis] = useState<GeminiAnalysisResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [showKeyModal, setShowKeyModal] = useState(false);
-  const [keyInput, setKeyInput] = useState(() => getGeminiApiKey());
-  const [keyNotice, setKeyNotice] = useState("");
 
   useEffect(() => {
     if (!caseItem) return;
@@ -1126,14 +1121,6 @@ export function CaseDetailPage() {
                   style={{ fontSize: "0.78rem", padding: "0.3rem 0.65rem" }}
                 >
                   {isAnalyzing ? "Analyzing..." : "Re-run Triage"}
-                </button>
-                <button
-                  type="button"
-                  className="button button-quiet"
-                  onClick={() => setShowKeyModal(true)}
-                  style={{ fontSize: "0.78rem", padding: "0.3rem 0.5rem", color: "#166534" }}
-                >
-                  {hasGeminiApiKey() ? "Gemini Key Configured" : "+ Add Gemini API Key"}
                 </button>
               </div>
             </div>
@@ -2818,89 +2805,6 @@ export function CaseDetailPage() {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 8: GEMINI API KEY CONFIGURATION */}
-      {showKeyModal && (
-        <div
-          className="modal-backdrop"
-          onClick={() => setShowKeyModal(false)}
-        >
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Configure Google Gemini API Key</h3>
-              <button
-                type="button"
-                className="btn-icon-close"
-                onClick={() => setShowKeyModal(false)}
-              >
-                <IconClose className="w-4 h-4" />
-              </button>
-            </div>
-            <div style={{ padding: "1rem 1.5rem" }}>
-              <p className="small muted" style={{ marginTop: 0 }}>
-                Enter your Google Gemini API key to activate live generative triage, legal entity extraction, and regulatory synopses powered by Google Gemini 2.0 Flash.
-              </p>
-              <label style={{ display: "block", marginBottom: "1rem" }}>
-                API Key
-                <input
-                  type="password"
-                  placeholder="AIzaSy..."
-                  value={keyInput}
-                  onChange={(e) => {
-                    setKeyInput(e.target.value);
-                    setKeyNotice("");
-                  }}
-                  style={{ width: "100%", fontFamily: "monospace", marginTop: "0.25rem" }}
-                />
-                <span className="small muted">
-                  Key is saved locally in browser storage. Obtain a key at{" "}
-                  <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ textDecoration: "underline" }}>
-                    Google AI Studio
-                  </a>.
-                </span>
-              </label>
-
-              {keyNotice && (
-                <div className="callout callout-info" style={{ marginBottom: "1rem", fontSize: "0.85rem" }}>
-                  {keyNotice}
-                </div>
-              )}
-
-              <div className="modal-footer" style={{ padding: 0 }}>
-                <button
-                  type="button"
-                  className="button button-quiet"
-                  onClick={() => {
-                    setKeyInput("");
-                    setGeminiApiKey("");
-                    setKeyNotice("API Key removed. Reverted to built-in dynamic legal engine.");
-                  }}
-                >
-                  Clear Key
-                </button>
-                <button
-                  type="button"
-                  className="button button-secondary"
-                  onClick={() => setShowKeyModal(false)}
-                >
-                  Close
-                </button>
-                <button
-                  type="button"
-                  className="button button-primary"
-                  onClick={async () => {
-                    setGeminiApiKey(keyInput.trim());
-                    setShowKeyModal(false);
-                    await handleRunAiAnalysis();
-                  }}
-                >
-                  Save &amp; Run Live Triage
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}

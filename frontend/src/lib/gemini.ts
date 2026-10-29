@@ -3,11 +3,12 @@
  *
  * Provides real-time AI case triage, statutory entity extraction,
  * regulatory synopsis, cross-bureau conflict analysis, and recommended next actions.
+ *
+ * Configured via .env: VITE_GEMINI_API_KEY
  */
 
 import type { SimCase, SimSubmission } from "../simulation/types";
 
-const GEMINI_STORAGE_KEY = "aicte_gemini_api_key";
 const GEMINI_MODEL = "gemini-2.0-flash";
 const GEMINI_FALLBACK_MODEL = "gemini-1.5-flash";
 
@@ -25,62 +26,21 @@ export interface GeminiAnalysisResult {
 }
 
 /**
- * Retrieve the configured Gemini API key from localStorage or Vite environment.
+ * Retrieve the Gemini API key strictly from environment variables (.env).
  */
 export function getGeminiApiKey(): string {
-  try {
-    const local = localStorage.getItem(GEMINI_STORAGE_KEY);
-    if (local && local.trim()) return local.trim();
-  } catch {
-    // localStorage not accessible
-  }
   return (import.meta.env.VITE_GEMINI_API_KEY as string | undefined)?.trim() || "";
 }
 
 /**
- * Save the Gemini API key to localStorage.
- */
-export function setGeminiApiKey(key: string): void {
-  try {
-    if (key.trim()) {
-      localStorage.setItem(GEMINI_STORAGE_KEY, key.trim());
-    } else {
-      localStorage.removeItem(GEMINI_STORAGE_KEY);
-    }
-  } catch (err) {
-    console.error("Failed to persist Gemini API key:", err);
-  }
-}
-
-/**
- * Check if a Gemini API key is configured.
+ * Check if a Gemini API key is configured in .env.
  */
 export function hasGeminiApiKey(): boolean {
   return Boolean(getGeminiApiKey());
 }
 
 /**
- * Verify if the Gemini API key is valid.
- */
-export function testGeminiApiKey(apiKey: string): Promise<{ success: boolean; message: string }> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey.trim()}`;
-  return fetch(url)
-    .then(async (res) => {
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        const msg = errorData?.error?.message || `API error ${res.status}: ${res.statusText}`;
-        return { success: false, message: msg };
-      }
-      return { success: true, message: "Connected successfully to Google Gemini API!" };
-    })
-    .catch((err) => ({
-      success: false,
-      message: `Network error: ${err?.message || "Failed to contact Gemini API."}`,
-    }));
-}
-
-/**
- * Generate intelligent deterministic triage if no Gemini key is present.
+ * Generate intelligent deterministic triage if no Gemini key is present in .env.
  */
 function generateDynamicFallback(
   caseItem: SimCase,
@@ -160,12 +120,12 @@ function generateDynamicFallback(
     suggested_action: suggested,
     overlap_action: overlapAction,
     isLiveGemini: false,
-    modelUsed: "Deterministic AICTE-Norms-v2.4",
+    modelUsed: "AICTE-Norms-v2.4",
   };
 }
 
 /**
- * Execute real AI Case Triage using Google Gemini API.
+ * Execute real AI Case Triage using Google Gemini API configured via .env.
  */
 export async function analyzeCaseWithGemini(
   caseItem: SimCase,
