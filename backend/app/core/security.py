@@ -88,6 +88,7 @@ class TokenVerifier:
                     "verify_signature": True,
                     "verify_exp": True,
                     "verify_aud": bool(self._settings.supabase_jwt_audience),
+                    "verify_iat": False,
                 },
             )
         except jwt.ExpiredSignatureError as exc:
