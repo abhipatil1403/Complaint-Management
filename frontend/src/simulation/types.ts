@@ -364,6 +364,14 @@ export interface SimCase {
     relationship_type: string;
     created_at: string;
   }>;
+  last_action_taken?: string;
+  last_action_date?: string;
+  next_action_required?: string;
+  ai_summary?: string;
+  ai_confidence_score?: number;
+  ai_sentiment_urgency?: string;
+  ai_suggested_next_action?: string;
+  ai_detected_category?: string;
   created_at: string;
   updated_at: string;
 }
@@ -379,7 +387,8 @@ export interface SimNotification {
     | "transfer"
     | "sla_warning"
     | "escalation"
-    | "resolution";
+    | "resolution"
+    | "overlap_alert";
   title: string;
   message: string;
   link_to?: string;

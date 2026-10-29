@@ -1423,6 +1423,139 @@ class SimulationEngine {
     this.notify();
   }
 
+  public initiateJointReview(caseIdA: string, caseIdB: string): void {
+    const actor = this.getActivePersona();
+    const timestamp = this.state.simulatedClock;
+
+    const caseA = this.state.cases.find(
+      (c) => c.case_id === caseIdA || c.case_number === caseIdA,
+    );
+    const caseB = this.state.cases.find(
+      (c) => c.case_id === caseIdB || c.case_number === caseIdB,
+    );
+
+    if (!caseA || !caseB)
+      throw new Error("Both cases must exist to initiate joint review.");
+
+    // Add Bureau B as collaborator on Case A if not already present
+    if (
+      !caseA.collaborating_bureaus.some(
+        (b) => b.bureau_id === caseB.lead_bureau_id,
+      )
+    ) {
+      caseA.collaborating_bureaus.push({
+        bureau_id: caseB.lead_bureau_id,
+        bureau_code: caseB.lead_bureau_code,
+        bureau_name: caseB.lead_bureau_name,
+        assignment_type: "collaborating",
+        assignment_status: "active",
+        assigned_at: timestamp,
+      });
+      caseA.action_history.unshift({
+        action_id: `act-joint-${Date.now()}-1`,
+        action_type: "joint_review_initiated",
+        action_description: `Inter-bureau joint review initiated with ${caseB.lead_bureau_name} (${caseB.case_number}) for coordinated action on ${caseA.institution_name}.`,
+        actor_name: actor.name,
+        actor_role: actor.roleName,
+        created_at: timestamp,
+      });
+      caseA.notes.unshift({
+        note_id: `note-joint-${Date.now()}-1`,
+        case_id: caseA.case_id,
+        author_id: actor.id,
+        author_name: actor.name,
+        author_role: actor.roleName,
+        bureau_id: actor.bureauId || caseA.lead_bureau_id,
+        bureau_name: actor.bureauName || caseA.lead_bureau_name,
+        note_text: `Inter-Bureau Joint Review initiated under SIH Problem Statement 26264. Harmonizing regulatory inquiries with ${caseB.lead_bureau_name} (${caseB.case_number}).`,
+        visibility: "shared",
+        note_type: "internal_review",
+        is_pinned: true,
+        created_at: timestamp,
+      });
+      caseA.updated_at = timestamp;
+    }
+
+    // Add Bureau A as collaborator on Case B if not already present
+    if (
+      !caseB.collaborating_bureaus.some(
+        (b) => b.bureau_id === caseA.lead_bureau_id,
+      )
+    ) {
+      caseB.collaborating_bureaus.push({
+        bureau_id: caseA.lead_bureau_id,
+        bureau_code: caseA.lead_bureau_code,
+        bureau_name: caseA.lead_bureau_name,
+        assignment_type: "collaborating",
+        assignment_status: "active",
+        assigned_at: timestamp,
+      });
+      caseB.action_history.unshift({
+        action_id: `act-joint-${Date.now()}-2`,
+        action_type: "joint_review_initiated",
+        action_description: `Inter-bureau joint review initiated with ${caseA.lead_bureau_name} (${caseA.case_number}) for coordinated action on ${caseB.institution_name}.`,
+        actor_name: actor.name,
+        actor_role: actor.roleName,
+        created_at: timestamp,
+      });
+      caseB.notes.unshift({
+        note_id: `note-joint-${Date.now()}-2`,
+        case_id: caseB.case_id,
+        author_id: actor.id,
+        author_name: actor.name,
+        author_role: actor.roleName,
+        bureau_id: actor.bureauId || caseB.lead_bureau_id,
+        bureau_name: actor.bureauName || caseB.lead_bureau_name,
+        note_text: `Inter-Bureau Joint Review initiated under SIH Problem Statement 26264. Harmonizing regulatory inquiries with ${caseA.lead_bureau_name} (${caseA.case_number}).`,
+        visibility: "shared",
+        note_type: "internal_review",
+        is_pinned: true,
+        created_at: timestamp,
+      });
+      caseB.updated_at = timestamp;
+    }
+
+    // Add inter-case links in related_cases if not already present
+    if (
+      !caseA.related_cases.some((r) => r.related_case_id === caseB.case_id)
+    ) {
+      caseA.related_cases.push({
+        relationship_id: `rel-${Date.now()}-1`,
+        related_case_id: caseB.case_id,
+        related_case_number: caseB.case_number,
+        related_case_title: caseB.title,
+        relationship_type: "overlapping_investigation",
+        created_at: timestamp,
+      });
+    }
+    if (
+      !caseB.related_cases.some((r) => r.related_case_id === caseA.case_id)
+    ) {
+      caseB.related_cases.push({
+        relationship_id: `rel-${Date.now()}-2`,
+        related_case_id: caseA.case_id,
+        related_case_number: caseA.case_number,
+        related_case_title: caseA.title,
+        relationship_type: "overlapping_investigation",
+        created_at: timestamp,
+      });
+    }
+
+    // Post notification
+    this.state.notifications.unshift({
+      id: `notif-joint-${Date.now()}`,
+      type: "overlap_alert",
+      title: `Inter-Bureau Joint Review Active: ${caseA.institution_name}`,
+      message: `Active coordination initiated between ${caseA.lead_bureau_name} (${caseA.case_number}) and ${caseB.lead_bureau_name} (${caseB.case_number}) to avoid duplicate or conflicting orders.`,
+      case_id: caseA.case_id,
+      link_to: `/cases/${caseA.case_id}`,
+      is_read: false,
+      created_at: timestamp,
+    });
+
+    this.notify();
+  }
+
   // =========================================================================
   // NOTIFICATIONS
   // =========================================================================

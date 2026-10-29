@@ -556,6 +556,14 @@ export interface CaseDetail {
   officer_assignments?: OfficerAssignmentItem[];
   related_cases: RelatedCaseItem[];
   action_history: CaseActionHistoryItem[];
+  last_action_taken?: string | null;
+  last_action_date?: string | null;
+  next_action_required?: string | null;
+  ai_summary?: string | null;
+  ai_confidence_score?: number | null;
+  ai_sentiment_urgency?: string | null;
+  ai_suggested_next_action?: string | null;
+  ai_detected_category?: string | null;
   notes_count?: number;
   attachments_count?: number;
 }

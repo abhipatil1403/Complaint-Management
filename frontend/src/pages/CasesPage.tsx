@@ -12,6 +12,7 @@ import {
   useSimulation,
   isResolved,
   canReadCase,
+  getOverlappingCases,
 } from "../simulation/selectors";
 import { scopedState, accessibleSubmissions } from "../simulation/scope";
 import { simulationStore } from "../simulation/simulationStore";
@@ -30,11 +31,20 @@ const KANBAN_STAGES: Array<{ id: CaseStatus; title: string; color: string }> = [
 
 export function CasesPage() {
   const { has, activePersona, simulatedClock } = useAuth();
+  const [params] = useSearchParams();
   const [viewMode, setViewMode] = useState<"kanban" | "table">("kanban");
   const [filterPill, setFilterPill] = useState<
-    "all" | "my_bureau" | "high_priority" | "due_soon"
-  >("all");
-  const [params] = useSearchParams();
+    "all" | "my_bureau" | "high_priority" | "due_soon" | "overlapping"
+  >(params.get("scope") === "overlapping" ? "overlapping" : "all");
+  const [selectedBureau, setSelectedBureau] = useState(
+    params.get("bureau") || "all",
+  );
+  const [selectedRegion, setSelectedRegion] = useState(
+    params.get("region") || "all",
+  );
+  const [selectedCategory, setSelectedCategory] = useState(
+    params.get("category") || "all",
+  );
   const [searchQuery, setSearchQuery] = useState(params.get("search") || "");
   const [createError, setCreateError] = useState("");
 
@@ -123,6 +133,22 @@ export function CasesPage() {
       )
     )
       return false;
+    if (selectedBureau !== "all") {
+      const matchBureau =
+        c.lead_bureau_id === selectedBureau ||
+        c.collaborating_bureaus.some(
+          (cb) =>
+            cb.bureau_id === selectedBureau && cb.assignment_status === "active",
+        );
+      if (!matchBureau) return false;
+    }
+    if (selectedRegion !== "all" && c.institution_region !== selectedRegion) {
+      return false;
+    }
+    if (selectedCategory !== "all" && c.category_id !== selectedCategory) {
+      return false;
+    }
+
     // Search
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
@@ -131,11 +157,22 @@ export function CasesPage() {
         (canReadCase(c, activePersona, state) &&
           c.title.toLowerCase().includes(q)) ||
         c.institution_name.toLowerCase().includes(q) ||
-        c.category_name.toLowerCase().includes(q);
+        (Boolean(c.institution_code) &&
+          c.institution_code!.toLowerCase().includes(q)) ||
+        c.category_name.toLowerCase().includes(q) ||
+        c.lead_bureau_code.toLowerCase().includes(q) ||
+        c.lead_bureau_name.toLowerCase().includes(q) ||
+        (Boolean(c.institution_region) &&
+          c.institution_region!.toLowerCase().includes(q));
       if (!matches) return false;
     }
 
     // Filter pills
+    if (filterPill === "overlapping") {
+      const overlaps = getOverlappingCases(state, c.case_id);
+      if (overlaps.length === 0) return false;
+    }
+
     if (filterPill === "my_bureau") {
       if (!activePersona.bureauId) return true;
       return (
@@ -317,27 +354,134 @@ export function CasesPage() {
           >
             Due Soon / Overdue
           </button>
+          <button
+            type="button"
+            className={`button ${filterPill === "overlapping" ? "button-primary" : "button-secondary"}`}
+            onClick={() =>
+              setFilterPill(filterPill === "overlapping" ? "all" : "overlapping")
+            }
+            style={{
+              borderRadius: "9999px",
+              padding: "0.35rem 0.95rem",
+              borderColor: "#d97706",
+              color: filterPill === "overlapping" ? "#ffffff" : "#92400e",
+              background: filterPill === "overlapping" ? "#d97706" : "#fef3c7",
+              fontWeight: 600,
+            }}
+          >
+            ⚠️ Overlapping Cases
+          </button>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-          <div
-            className="topbar-search"
-            style={{ width: "240px", padding: "0.3rem 0.75rem" }}
-          >
-            <IconSearch className="w-3.5 h-3.5 opacity-60" />
-            <input
-              type="text"
-              placeholder="Filter by keyword..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{ fontSize: "0.82rem" }}
-            />
-          </div>
           <span className="small muted font-semibold">
             {filteredCases.length} case{filteredCases.length === 1 ? "" : "s"}{" "}
             shown
           </span>
         </div>
+      </div>
+
+      {/* Search and Dropdown Filter Bar (Problem Statement 26264) */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.75rem",
+          marginBottom: "1.25rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <div
+          className="topbar-search"
+          style={{ flex: "1 1 260px", minWidth: "220px", padding: "0.35rem 0.75rem" }}
+        >
+          <IconSearch className="w-3.5 h-3.5 opacity-60" />
+          <input
+            type="text"
+            placeholder="Search by Case ID, AICTE Permanent ID (e.g. 1-1002345671), Institution, Bureau..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{ fontSize: "0.82rem", width: "100%" }}
+          />
+        </div>
+
+        <select
+          value={selectedBureau}
+          onChange={(e) => setSelectedBureau(e.target.value)}
+          style={{
+            fontSize: "0.82rem",
+            padding: "0.4rem 0.75rem",
+            borderRadius: "var(--radius-md)",
+            border: "1px solid var(--color-border)",
+            background: "var(--color-surface-white)",
+          }}
+        >
+          <option value="all">All Bureaus/Cells</option>
+          {state.bureaus.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name} ({b.code})
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={selectedRegion}
+          onChange={(e) => setSelectedRegion(e.target.value)}
+          style={{
+            fontSize: "0.82rem",
+            padding: "0.4rem 0.75rem",
+            borderRadius: "var(--radius-md)",
+            border: "1px solid var(--color-border)",
+            background: "var(--color-surface-white)",
+          }}
+        >
+          <option value="all">All Regions</option>
+          {state.regions.map((r) => (
+            <option key={r.id} value={r.name}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={selectedCategory}
+          onChange={(e) => setSelectedCategory(e.target.value)}
+          style={{
+            fontSize: "0.82rem",
+            padding: "0.4rem 0.75rem",
+            borderRadius: "var(--radius-md)",
+            border: "1px solid var(--color-border)",
+            background: "var(--color-surface-white)",
+          }}
+        >
+          <option value="all">All Categories</option>
+          {state.categories.map((cat) => (
+            <option key={cat.id} value={cat.id}>
+              {cat.name}
+            </option>
+          ))}
+        </select>
+
+        {(selectedBureau !== "all" ||
+          selectedRegion !== "all" ||
+          selectedCategory !== "all" ||
+          filterPill !== "all" ||
+          searchQuery) && (
+          <button
+            type="button"
+            className="button button-quiet"
+            style={{ fontSize: "0.78rem" }}
+            onClick={() => {
+              setSelectedBureau("all");
+              setSelectedRegion("all");
+              setSelectedCategory("all");
+              setFilterPill("all");
+              setSearchQuery("");
+            }}
+          >
+            Clear Filters
+          </button>
+        )}
       </div>
 
       {/* KANBAN VIEW (Fernly Reference 01) */}
@@ -367,6 +511,7 @@ export function CasesPage() {
                     c.target_resolution_date,
                     c.status,
                   );
+                  const overlaps = getOverlappingCases(state, c.case_id);
                   return (
                     <Link
                       key={c.case_id}
@@ -377,6 +522,20 @@ export function CasesPage() {
                         <span className={`badge badge-priority-${c.priority}`}>
                           {c.priority.toUpperCase()}
                         </span>
+                        {overlaps.length > 0 && (
+                          <span
+                            className="badge"
+                            style={{
+                              background: "#fef3c7",
+                              color: "#92400e",
+                              border: "1px solid #d97706",
+                              fontSize: "0.68rem",
+                              fontWeight: 700,
+                            }}
+                          >
+                            ⚠️ Overlap
+                          </span>
+                        )}
                         <span
                           className="small muted font-semibold"
                           style={{ fontSize: "0.72rem" }}
@@ -392,7 +551,24 @@ export function CasesPage() {
                       </div>
                       <div className="kanban-card-inst">
                         {c.institution_name}
+                        {c.institution_code ? ` · ${c.institution_code}` : ""}
                       </div>
+
+                      {c.next_action_required && (
+                        <div
+                          style={{
+                            fontSize: "0.72rem",
+                            color: "#155a37",
+                            fontWeight: 600,
+                            marginTop: "0.25rem",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Next: {c.next_action_required}
+                        </div>
+                      )}
 
                       <div className="kanban-card-footer">
                         <div
@@ -486,12 +662,29 @@ export function CasesPage() {
                 return (
                   <tr key={c.case_id}>
                     <td>
-                      <Link
-                        to={`/cases/${c.case_id}`}
-                        style={{ fontWeight: 600 }}
-                      >
-                        {c.case_number}
-                      </Link>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                        <Link
+                          to={`/cases/${c.case_id}`}
+                          style={{ fontWeight: 600 }}
+                        >
+                          {c.case_number}
+                        </Link>
+                        {getOverlappingCases(state, c.case_id).length > 0 && (
+                          <span
+                            className="badge"
+                            title="Potential Overlapping Cases – Coordination Required"
+                            style={{
+                              background: "#fef3c7",
+                              color: "#92400e",
+                              border: "1px solid #d97706",
+                              fontSize: "0.68rem",
+                              fontWeight: 700,
+                            }}
+                          >
+                            ⚠️ Overlap
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td style={{ maxWidth: "260px" }}>
                       <div
@@ -506,8 +699,28 @@ export function CasesPage() {
                           ? c.title
                           : "Restricted case · request access to view"}
                       </div>
+                      {c.next_action_required && (
+                        <div
+                          style={{
+                            fontSize: "0.72rem",
+                            color: "#155a37",
+                            fontWeight: 600,
+                            marginTop: "0.2rem",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Next: {c.next_action_required}
+                        </div>
+                      )}
                     </td>
-                    <td>{c.institution_name}</td>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{c.institution_name}</div>
+                      <div className="small muted" style={{ fontSize: "0.74rem" }}>
+                        {c.institution_code || "AICTE ID recorded"} · {c.institution_region || "Northern"}
+                      </div>
+                    </td>
                     <td>
                       <span className="small muted">{c.category_name}</span>
                     </td>

@@ -11,6 +11,9 @@ import {
   StatusBadge,
   formatDate,
 } from "../components/ui";
+import { caseStatusLabel, severityLabel } from "../lib/cases";
+import { useSimulation, isResolved } from "../simulation/selectors";
+import type { SimCase } from "../simulation/types";
 import { toApiError, type ApiError } from "../lib/api";
 import { usePagedResource, useResource } from "../lib/useResource";
 import type {
@@ -64,6 +67,13 @@ function InstitutionDetailContent({ institutionId }: { institutionId: string }) 
   }
 
   const data = institution.data;
+  const simState = useSimulation();
+  const institutionCases = simState.cases.filter(
+    (c) =>
+      c.institution_id === institutionId ||
+      (Boolean(data.aicte_permanent_id) && c.institution_code === data.aicte_permanent_id) ||
+      c.institution_name.toLowerCase().trim() === data.official_name.toLowerCase().trim(),
+  );
 
   return (
     <section>
@@ -188,8 +198,177 @@ function InstitutionDetailContent({ institutionId }: { institutionId: string }) 
         />
       ) : null}
 
+      {/* Centralized Institution Profile: Consolidated Complaint & Case History (Problem Statement 26264) */}
+      <InstitutionCaseHistorySection
+        cases={institutionCases}
+        institutionName={data.official_name}
+      />
+
       <AliasSection institutionId={institutionId} />
     </section>
+  );
+}
+
+function InstitutionCaseHistorySection({
+  cases,
+  institutionName,
+}: {
+  cases: SimCase[];
+  institutionName: string;
+}) {
+  const activeCount = cases.filter((c) => !isResolved(c)).length;
+  const resolvedCount = cases.filter(isResolved).length;
+
+  // Detect cross-bureau overlap for this institution
+  const activeBureaus = [
+    ...new Set(
+      cases
+        .filter((c) => !isResolved(c))
+        .map((c) => `${c.lead_bureau_name} (${c.lead_bureau_code})`),
+    ),
+  ];
+  const hasCrossBureauOverlap = activeBureaus.length > 1;
+
+  return (
+    <div className="card" style={{ marginTop: "1.5rem" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          flexWrap: "wrap",
+          gap: "1rem",
+          marginBottom: "1rem",
+        }}
+      >
+        <div>
+          <h2 style={{ margin: 0, fontSize: "1.25rem" }}>
+            Consolidated Grievance &amp; Regulatory History
+          </h2>
+          <p className="small muted" style={{ margin: "0.25rem 0 0" }}>
+            Cross-bureau record of all complaints, inquiries, and regulatory actions associated with {institutionName}.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <span className="badge badge-neutral">Total: {cases.length}</span>
+          <span className="badge badge-warning">Active: {activeCount}</span>
+          <span className="badge badge-success">Disposed: {resolvedCount}</span>
+        </div>
+      </div>
+
+      {hasCrossBureauOverlap && (
+        <div
+          style={{
+            background: "#fffbeb",
+            border: "1.5px solid #d97706",
+            borderRadius: "var(--radius-lg)",
+            padding: "0.85rem 1rem",
+            marginBottom: "1.25rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+          }}
+        >
+          <span style={{ fontSize: "1.2rem" }}>⚠️</span>
+          <div>
+            <strong style={{ color: "#92400e", fontSize: "0.92rem", display: "block" }}>
+              Potential Overlapping Cases – Coordination Required
+            </strong>
+            <span style={{ color: "#78350f", fontSize: "0.82rem" }}>
+              Active parallel inquiries are currently open across multiple Bureaus/Cells ({activeBureaus.join(", ")}).
+              Inter-bureau synchronization is active to avoid duplicate notices.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {cases.length === 0 ? (
+        <EmptyState
+          title="No complaints or regulatory cases recorded"
+        />
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Case Number</th>
+                <th>Title / Issue</th>
+                <th>Category</th>
+                <th>Lead Bureau / Cell</th>
+                <th>Status</th>
+                <th>Priority</th>
+                <th>Assigned Officer</th>
+                <th>Date Received</th>
+                <th>Target Disposal</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cases.map((c) => {
+                const leadOfficer = c.officer_assignments.find(
+                  (o) => o.status === "active",
+                );
+                return (
+                  <tr key={c.case_id}>
+                    <td>
+                      <Link
+                        to={`/cases/${c.case_id}`}
+                        style={{
+                          fontWeight: 700,
+                          color: "#155a37",
+                          textDecoration: "underline",
+                        }}
+                      >
+                        {c.case_number}
+                      </Link>
+                    </td>
+                    <td>
+                      <strong style={{ fontSize: "0.88rem", display: "block" }}>
+                        {c.title}
+                      </strong>
+                    </td>
+                    <td>
+                      <span className="small muted">{c.category_name}</span>
+                    </td>
+                    <td>
+                      <span className="badge badge-neutral" style={{ fontSize: "0.74rem" }}>
+                        {c.lead_bureau_code}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="badge badge-neutral" style={{ fontSize: "0.74rem" }}>
+                        {caseStatusLabel(c.status)}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`badge badge-priority-${c.priority}`} style={{ fontSize: "0.74rem" }}>
+                        {severityLabel(c.priority)}
+                      </span>
+                    </td>
+                    <td>
+                      <span style={{ fontSize: "0.82rem" }}>
+                        {leadOfficer?.officer_name || "Unassigned"}
+                      </span>
+                    </td>
+                    <td className="small muted">{formatDate(c.opened_at)}</td>
+                    <td className="small muted">{formatDate(c.target_resolution_date)}</td>
+                    <td>
+                      <Link
+                        to={`/cases/${c.case_id}`}
+                        className="button button-quiet"
+                        style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem" }}
+                      >
+                        View →
+                      </Link>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

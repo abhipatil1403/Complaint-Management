@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthProvider";
 import {
   canReadCase,
   exportCsv,
+  getAllOverlappingCases,
   isResolved,
   reporting,
   useSimulation,
@@ -19,6 +20,7 @@ export function HomePage() {
   const state = scopedState(rawState, activePersona);
   const metrics = reporting(state);
   const period = reporting(state, days);
+  const overlappingCases = getAllOverlappingCases(state);
   const pendingVerification = state.verificationTasks.filter(
     (t) => t.verification_status === "pending",
   ).length;
@@ -85,6 +87,50 @@ export function HomePage() {
           </Link>
         </div>
       </div>
+
+      {/* SIH Problem Statement 26264: Cross-Bureau Overlap Alert Banner */}
+      {overlappingCases.length > 0 && (
+        <div
+          style={{
+            background: "#fffbeb",
+            border: "1.5px solid #d97706",
+            borderRadius: "var(--radius-lg)",
+            padding: "0.85rem 1.25rem",
+            marginBottom: "1.25rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "0.75rem",
+            boxShadow: "0 2px 6px rgba(217, 119, 6, 0.1)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            <span style={{ fontSize: "1.3rem" }}>⚠️</span>
+            <div>
+              <strong style={{ color: "#92400e", fontSize: "0.94rem", display: "block" }}>
+                Potential Overlapping Cases – Coordination Required
+              </strong>
+              <span style={{ color: "#78350f", fontSize: "0.82rem" }}>
+                AICTE OneDesk detected active parallel proceedings for Delhi Technological University between Regulation Bureau (BUR-RB) and Public Grievance Redressal Cell (BUR-PGRC).
+              </span>
+            </div>
+          </div>
+          <Link
+            to="/cases?scope=overlapping"
+            className="button button-primary"
+            style={{
+              fontSize: "0.82rem",
+              background: "#d97706",
+              borderColor: "#b45309",
+              color: "#ffffff",
+            }}
+          >
+            Review Overlapping Cases →
+          </Link>
+        </div>
+      )}
+
       <div className="workspace-shortcuts">
         {has("institution.verify") && (
           <Link to="/workspaces/verification">

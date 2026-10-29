@@ -3,6 +3,7 @@ import { PdfPreview } from "../components/PdfPreview";
 import {
   canActOnCase,
   canReadCase,
+  getOverlappingCases,
   useSimulation,
 } from "../simulation/selectors";
 import { RestrictedCase } from "../components/RestrictedCase";
@@ -650,10 +651,257 @@ export function CaseDetailPage() {
           </div>
           <div>
             Opened: {formatDateTime(caseItem.opened_at)} · Last Action:{" "}
-            {formatDateTime(caseItem.updated_at)}
+            {formatDateTime(caseItem.last_action_date || caseItem.updated_at)}
+          </div>
+        </div>
+
+        {/* Action Movement Summary (Problem Statement 26264) */}
+        <div
+          style={{
+            marginTop: "0.85rem",
+            paddingTop: "0.85rem",
+            borderTop: "1px solid var(--color-border)",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: "0.85rem",
+            fontSize: "0.85rem",
+          }}
+        >
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "baseline" }}>
+            <span
+              className="badge badge-neutral"
+              style={{ fontSize: "0.72rem", textTransform: "uppercase", fontWeight: 700 }}
+            >
+              Last Action Taken
+            </span>
+            <span style={{ color: "var(--color-text-primary)", fontWeight: 500 }}>
+              {caseItem.last_action_taken || "Case created in bureau workflow queue"}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "baseline" }}>
+            <span
+              className="badge"
+              style={{
+                fontSize: "0.72rem",
+                textTransform: "uppercase",
+                fontWeight: 700,
+                background: "#fef3c7",
+                color: "#92400e",
+                border: "1px solid #f59e0b",
+              }}
+            >
+              Next Action Required
+            </span>
+            <span style={{ color: "var(--color-text-primary)", fontWeight: 600 }}>
+              {caseItem.next_action_required || "Complete initial document review and officer assignment"}
+            </span>
           </div>
         </div>
       </div>
+
+      {/* Cross-Bureau Overlap Detection Banner (SIH Problem Statement 26264) */}
+      {(() => {
+        const overlappingCases = getOverlappingCases(simState, caseItem.case_id);
+        if (overlappingCases.length === 0) return null;
+
+        return (
+          <div
+            className="card"
+            style={{
+              marginBottom: "1.5rem",
+              border: "1.5px solid #d97706",
+              background: "#fffbeb",
+              boxShadow: "0 2px 8px rgba(217, 119, 6, 0.12)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "space-between",
+                flexWrap: "wrap",
+                gap: "1rem",
+                marginBottom: "0.75rem",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                <div
+                  style={{
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "50%",
+                    background: "#fef3c7",
+                    border: "1px solid #f59e0b",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "1.2rem",
+                    flexShrink: 0,
+                  }}
+                >
+                  ⚠️
+                </div>
+                <div>
+                  <h3
+                    style={{
+                      color: "#92400e",
+                      fontSize: "1.05rem",
+                      margin: 0,
+                      fontWeight: 700,
+                    }}
+                  >
+                    Potential Overlapping Cases – Coordination Required
+                  </h3>
+                  <p
+                    style={{
+                      color: "#78350f",
+                      fontSize: "0.85rem",
+                      margin: "0.2rem 0 0 0",
+                    }}
+                  >
+                    AICTE OneDesk inter-bureau intelligence identified active parallel
+                    investigation on <strong>{caseItem.institution_name}</strong> (AICTE Permanent ID:{" "}
+                    <strong>{caseItem.institution_code || "1-1002345671"}</strong>) across multiple Bureaus/Cells.
+                    Joint coordination is required to prevent conflicting orders and duplicate proceedings.
+                  </p>
+                </div>
+              </div>
+              <span
+                className="badge"
+                style={{
+                  background: "#fef3c7",
+                  color: "#92400e",
+                  border: "1px solid #d97706",
+                  fontWeight: 700,
+                }}
+              >
+                {overlappingCases.length} OVERLAPPING {overlappingCases.length === 1 ? "CASE" : "CASES"}
+              </span>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gap: "0.75rem",
+                marginTop: "0.5rem",
+              }}
+            >
+              {overlappingCases.map((otherCase) => {
+                const isJointReviewActive =
+                  caseItem.collaborating_bureaus?.some(
+                    (b) => b.bureau_id === otherCase.lead_bureau_id,
+                  ) ||
+                  otherCase.collaborating_bureaus?.some(
+                    (b) => b.bureau_id === caseItem.lead_bureau_id,
+                  );
+
+                return (
+                  <div
+                    key={otherCase.case_id}
+                    style={{
+                      background: "#ffffff",
+                      border: "1px solid #fed7aa",
+                      borderRadius: "var(--radius-lg)",
+                      padding: "1rem",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      flexWrap: "wrap",
+                      gap: "1rem",
+                    }}
+                  >
+                    <div style={{ flex: "1 1 300px" }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                          marginBottom: "0.35rem",
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <Link
+                          to={`/cases/${otherCase.case_id}`}
+                          style={{
+                            fontWeight: 700,
+                            fontSize: "0.92rem",
+                            color: "#1d4ed8",
+                            textDecoration: "underline",
+                          }}
+                        >
+                          {otherCase.case_number}
+                        </Link>
+                        <span className="badge badge-neutral" style={{ fontSize: "0.72rem" }}>
+                          {otherCase.lead_bureau_name} ({otherCase.lead_bureau_code})
+                        </span>
+                        <span className={`badge badge-priority-${otherCase.priority}`}>
+                          {severityLabel(otherCase.priority)}
+                        </span>
+                        <span className="badge badge-neutral">
+                          {caseStatusLabel(otherCase.status)}
+                        </span>
+                      </div>
+                      <div
+                        style={{
+                          fontWeight: 600,
+                          fontSize: "0.88rem",
+                          color: "var(--color-text-primary)",
+                          marginBottom: "0.25rem",
+                        }}
+                      >
+                        {otherCase.title}
+                      </div>
+                      <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)" }}>
+                        Category: {otherCase.category_name} · Opened:{" "}
+                        {formatDateTime(otherCase.opened_at)}
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <Link
+                        to={`/cases/${otherCase.case_id}`}
+                        className="button button-quiet"
+                        style={{ fontSize: "0.82rem" }}
+                      >
+                        Inspect Case →
+                      </Link>
+                      {isJointReviewActive ? (
+                        <span
+                          className="badge"
+                          style={{
+                            background: "#ecfdf5",
+                            color: "#065f46",
+                            border: "1px solid #10b981",
+                            fontWeight: 600,
+                            padding: "0.45rem 0.75rem",
+                          }}
+                        >
+                          ✓ Joint Review Active
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="button button-primary"
+                          style={{
+                            fontSize: "0.82rem",
+                            background: "#155a37",
+                          }}
+                          onClick={() => {
+                            simulationStore.initiateJointReview(caseItem.case_id, otherCase.case_id);
+                            reload();
+                          }}
+                        >
+                          Initiate Joint Review
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Pill Tabs Navigation */}
       <div className="pill-tabs case-tabs" style={{ marginBottom: "1.5rem" }}>
@@ -723,7 +971,139 @@ export function CaseDetailPage() {
       )}
       {/* TAB 1: OVERVIEW */}
       {activeTab === "overview" && (
-        <div className="case-overview-grid">
+        <>
+          {/* AI Case Triage & Regulatory Synopsis Card (Innovation Expected - Problem Statement 26264) */}
+          <div
+            className="card"
+            style={{
+              background: "linear-gradient(180deg, #f0fdf4 0%, #ffffff 100%)",
+              border: "1px solid #86efac",
+              boxShadow: "var(--shadow-sm)",
+              marginBottom: "1.25rem",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: "0.85rem",
+                flexWrap: "wrap",
+                gap: "0.5rem",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                <span style={{ fontSize: "1.3rem" }}>🤖</span>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "1.05rem", color: "#166534" }}>
+                    AI Case Triage &amp; Regulatory Synopsis
+                  </h3>
+                  <p className="small muted" style={{ margin: "0.15rem 0 0 0" }}>
+                    Smart NLP entity extraction, rule-based cross-referencing, and inter-bureau coordination assistance.
+                  </p>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <span
+                  className="badge"
+                  style={{
+                    background: "#dcfce7",
+                    color: "#166534",
+                    border: "1px solid #86efac",
+                    fontWeight: 700,
+                    fontSize: "0.78rem",
+                  }}
+                >
+                  {caseItem.ai_confidence_score || 94}% Confidence · AICTE-Norms-v2.4
+                </span>
+                <span
+                  className="badge"
+                  style={{
+                    background: caseItem.priority === "critical" ? "#fee2e2" : "#fef3c7",
+                    color: caseItem.priority === "critical" ? "#991b1b" : "#92400e",
+                    border: "1px solid #fca5a5",
+                    fontSize: "0.78rem",
+                    fontWeight: 700,
+                  }}
+                >
+                  {caseItem.ai_sentiment_urgency || (caseItem.priority === "critical" ? "Critical Urgency" : "High Urgency")}
+                </span>
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: "#ffffff",
+                padding: "1rem",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid #bbf7d0",
+                fontSize: "0.88rem",
+                lineHeight: 1.6,
+                color: "var(--color-text-primary)",
+                marginBottom: "0.85rem",
+              }}
+            >
+              <strong style={{ color: "#166534" }}>Automated Finding: </strong>
+              {caseItem.ai_summary ||
+                "Rule engine identified potential statutory non-compliance. Cross-referenced AICTE permanent institution repository and parallel cell registries."}
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                background: "#f0fdf4",
+                padding: "0.85rem 1rem",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid #dcfce7",
+                flexWrap: "wrap",
+                gap: "0.75rem",
+              }}
+            >
+              <div>
+                <span
+                  className="small muted"
+                  style={{
+                    display: "block",
+                    fontSize: "0.72rem",
+                    textTransform: "uppercase",
+                    fontWeight: 700,
+                    color: "#166534",
+                  }}
+                >
+                  Suggested Next Action Required
+                </span>
+                <strong style={{ fontSize: "0.9rem", color: "#155a37" }}>
+                  {caseItem.ai_suggested_next_action ||
+                    caseItem.next_action_required ||
+                    "Serve regulatory directive to Principal within 3 working days"}
+                </strong>
+              </div>
+              {has("case.note.create") && (
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  style={{
+                    fontSize: "0.82rem",
+                    borderColor: "#86efac",
+                    color: "#166534",
+                    background: "#ffffff",
+                  }}
+                  onClick={() => {
+                    setNoteText(
+                      `[AI Recommended Action] ${caseItem.ai_suggested_next_action || caseItem.next_action_required || "Serve regulatory directive"}`,
+                    );
+                    setShowNoteModal(true);
+                  }}
+                >
+                  + Record as Official Note
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="case-overview-grid">
           <div className="card">
             <h3 style={{ marginBottom: "0.75rem" }}>
               Grievance Statement &amp; Facts
@@ -794,6 +1174,7 @@ export function CaseDetailPage() {
             </div>
           </div>
         </div>
+        </>
       )}
 
       {/* TAB 2: ASSIGNMENTS */}

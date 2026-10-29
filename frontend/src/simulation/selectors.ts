@@ -116,6 +116,134 @@ export function reporting(state: SimState, days?: number) {
     active: cases.filter((c) => !isResolved(c)),
   };
 }
+
+/**
+ * Returns any active case in a DIFFERENT lead bureau that concerns the same institution.
+ * (Problem Statement 26264: Cross-Bureau Overlap Detection)
+ */
+export function getOverlappingCases(
+  state: SimState,
+  targetCaseId: string,
+): SimCase[] {
+  const target = state.cases.find(
+    (c) => c.case_id === targetCaseId || c.case_number === targetCaseId,
+  );
+  if (!target || isResolved(target)) return [];
+
+  return state.cases.filter((c) => {
+    if (c.case_id === target.case_id) return false;
+    if (isResolved(c)) return false;
+    if (c.lead_bureau_id === target.lead_bureau_id) return false;
+
+    // Match by institution ID or AICTE Permanent Code or matching names
+    const sameInstitution =
+      (Boolean(target.institution_id) && c.institution_id === target.institution_id) ||
+      (Boolean(target.institution_code) && c.institution_code === target.institution_code) ||
+      (Boolean(target.institution_name) &&
+        c.institution_name.toLowerCase().trim() ===
+          target.institution_name.toLowerCase().trim());
+
+    return sameInstitution;
+  });
+}
+
+/**
+ * Returns all active cases that currently overlap with an active case from another bureau.
+ */
+export function getAllOverlappingCases(state: SimState): SimCase[] {
+  const activeCases = state.cases.filter((c) => !isResolved(c));
+  const overlappingSet = new Set<string>();
+
+  for (const c of activeCases) {
+    const overlaps = getOverlappingCases(state, c.case_id);
+    if (overlaps.length > 0) {
+      overlappingSet.add(c.case_id);
+      for (const o of overlaps) {
+        overlappingSet.add(o.case_id);
+      }
+    }
+  }
+
+  return activeCases.filter((c) => overlappingSet.has(c.case_id));
+}
+
+/**
+ * Returns age in days from case opened_at to simulatedClock.
+ */
+export function getCaseAgeDays(caseItem: SimCase, clock: string): number {
+  const now = Date.parse(clock);
+  const opened = Date.parse(caseItem.opened_at);
+  if (isNaN(opened) || isNaN(now)) return 0;
+  return Math.max(0, Math.floor((now - opened) / 86400000));
+}
+
+/**
+ * Government audit pending case ageing brackets (< 7 Days, 7–15 Days, 15–30 Days, > 30 Days).
+ */
+export function getPendingAgeingBuckets(state: SimState) {
+  const clock = state.simulatedClock;
+  const activeCases = state.cases.filter((c) => !isResolved(c));
+
+  const under7: SimCase[] = [];
+  const from7to15: SimCase[] = [];
+  const from15to30: SimCase[] = [];
+  const over30: SimCase[] = [];
+
+  for (const c of activeCases) {
+    const age = getCaseAgeDays(c, clock);
+    if (age < 7) {
+      under7.push(c);
+    } else if (age <= 15) {
+      from7to15.push(c);
+    } else if (age <= 30) {
+      from15to30.push(c);
+    } else {
+      over30.push(c);
+    }
+  }
+
+  return {
+    totalActive: activeCases.length,
+    under7,
+    from7to15,
+    from15to30,
+    over30,
+  };
+}
+
+/**
+ * Regional disposal and grievance performance statistics.
+ */
+export function getRegionDisposalStats(state: SimState) {
+  const clock = Date.parse(state.simulatedClock);
+
+  return state.regions.map((reg) => {
+    const regCases = state.cases.filter(
+      (c) =>
+        c.institution_region === reg.name ||
+        c.institution_region?.toLowerCase().includes(reg.code.replace("REG-", "").toLowerCase()),
+    );
+    const total = regCases.length;
+    const resolved = regCases.filter(isResolved).length;
+    const active = regCases.filter((c) => !isResolved(c)).length;
+    const overdue = regCases.filter(
+      (c) => !isResolved(c) && Date.parse(c.target_resolution_date) < clock,
+    ).length;
+    const disposalRate = total > 0 ? Math.round((resolved / total) * 100) : 100;
+
+    return {
+      regionId: reg.id,
+      regionCode: reg.code,
+      regionName: reg.name,
+      total,
+      active,
+      resolved,
+      overdue,
+      disposalRate,
+    };
+  });
+}
+
 export function exportCsv(name: string, rows: unknown[][]) {
   const csv = rows
     .map((row) =>
