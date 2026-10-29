@@ -120,13 +120,15 @@ export function usePagedResource<T>(
           pagedCache.set(targetKey, { items: pageData, cursor: nextCursorVal });
         }
         setError(null);
+        return true;
       } catch (raw) {
         if (currentKeyRef.current !== targetKey) {
-          return;
+          return false;
         }
         if (!silent) {
           setError(toApiError(raw));
         }
+        return false;
       } finally {
         inFlightRef.current = false;
         if (currentKeyRef.current === targetKey && !silent) {
@@ -147,14 +149,17 @@ export function usePagedResource<T>(
 
     async function poll() {
       if (!active) return;
-      await fetchPage(null, false, true);
-      if (active) {
-        timerId = window.setTimeout(poll, 1000);
+      const ok = await fetchPage(null, false, true);
+      if (active && ok) {
+        timerId = window.setTimeout(poll, 15000);
       }
     }
 
-    void fetchPage(null, false, Boolean(cached));
-    timerId = window.setTimeout(poll, 1000);
+    void fetchPage(null, false, Boolean(cached)).then((ok) => {
+      if (active && ok) {
+        timerId = window.setTimeout(poll, 15000);
+      }
+    });
 
     return () => {
       active = false;
@@ -167,8 +172,12 @@ export function usePagedResource<T>(
     loading,
     error,
     hasMore: cursor !== null,
-    reload: () => fetchPage(null, false, false),
-    loadMore: () => fetchPage(cursor, true, false),
+    reload: async () => {
+      await fetchPage(null, false, false);
+    },
+    loadMore: async () => {
+      await fetchPage(cursor, true, false);
+    },
   };
 }
 
@@ -235,14 +244,14 @@ export function useResource<T>(path: string | null): Resource<T> {
         }
         resourceCache.set(targetPath, result);
         setError(null);
+        return true;
       } catch (raw) {
         if (currentPathRef.current !== targetPath) {
-          return;
+          return false;
         }
-        if (!silent) {
-          setError(toApiError(raw));
-          setData(null);
-        }
+        setError(toApiError(raw));
+        setData(null);
+        return false;
       } finally {
         inFlightRef.current = false;
         if (currentPathRef.current === targetPath && !silent) {
@@ -263,14 +272,17 @@ export function useResource<T>(path: string | null): Resource<T> {
 
     async function poll() {
       if (!active) return;
-      await load(true);
-      if (active) {
-        timerId = window.setTimeout(poll, 1000);
+      const ok = await load(true);
+      if (active && ok) {
+        timerId = window.setTimeout(poll, 15000);
       }
     }
 
-    void load(Boolean(cached));
-    timerId = window.setTimeout(poll, 1000);
+    void load(Boolean(cached)).then((ok) => {
+      if (active && ok) {
+        timerId = window.setTimeout(poll, 15000);
+      }
+    });
 
     return () => {
       active = false;
@@ -278,5 +290,12 @@ export function useResource<T>(path: string | null): Resource<T> {
     };
   }, [path, load]);
 
-  return { data, loading, error, reload: () => load(false) };
+  return {
+    data,
+    loading,
+    error,
+    reload: async () => {
+      await load(false);
+    },
+  };
 }
