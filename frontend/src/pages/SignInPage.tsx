@@ -1,6 +1,6 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
-import { IconShield } from "../components/Icons";
+import { BrandLogo } from "../components/BrandLogo";
 
 export function SignInPage() {
   const { status, signInPersona, personas } = useAuth();
@@ -50,6 +50,7 @@ export function SignInPage() {
             <div
               style={{
                 width: "48px",
+                overflow: "hidden",
                 height: "48px",
                 borderRadius: "var(--radius-lg)",
                 background: "rgba(255, 255, 255, 0.15)",
@@ -58,7 +59,7 @@ export function SignInPage() {
                 justifyContent: "center",
               }}
             >
-              <IconShield className="w-7 h-7 text-white" />
+              <BrandLogo size={36} fallbackIconClass="w-7 h-7 text-white" />
             </div>
             <div>
               <h1 style={{ color: "white", fontSize: "1.5rem", marginBottom: "0.25rem" }}>

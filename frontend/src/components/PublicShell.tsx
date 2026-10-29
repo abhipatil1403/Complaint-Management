@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import { RoleSwitcher } from "./RoleSwitcher";
 import { useAuth } from "../auth/AuthProvider";
+import { BrandLogo } from "./BrandLogo";
 
 /** Chrome for the public simulated portals. Deliberately louder than the app. */
 export function PublicShell({ children }: { children: ReactNode }) {
@@ -14,7 +15,7 @@ export function PublicShell({ children }: { children: ReactNode }) {
       <header className="public-header">
         <Link to="/demo" className="brand">
           <span className="brand-mark" aria-hidden="true">
-            OD
+            <BrandLogo size={28} fallbackIconClass="w-5 h-5 text-white" />
           </span>
           <span>
             <strong>AICTE OneDesk</strong>

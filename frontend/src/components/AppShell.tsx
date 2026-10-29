@@ -22,7 +22,6 @@ import {
   IconLogout,
   IconRegions,
   IconSettings,
-  IconShield,
   IconVerification,
 } from "./Icons";
 import { NotificationDrawer } from "./NotificationDrawer";
@@ -31,6 +30,7 @@ import { BureauSwitcher } from "./BureauSwitcher";
 import { useSimulation, visibleNotifications } from "../simulation/selectors";
 import { landingLabel, scopedState } from "../simulation/scope";
 import { RoleSwitcher } from "./RoleSwitcher";
+import { BrandLogo } from "./BrandLogo";
 
 export function AppShell() {
   const { has, signOut, activePersona } = useAuth();
@@ -92,7 +92,7 @@ export function AppShell() {
           <div className="sidebar-header">
             <Link to="/" className="sidebar-brand">
               <div className="brand-icon-box">
-                <IconShield className="w-5 h-5" />
+                <BrandLogo size={28} fallbackIconClass="w-5 h-5 text-white" />
               </div>
               <div className="brand-text-col">
                 <span className="brand-title">AICTE OneDesk</span>
