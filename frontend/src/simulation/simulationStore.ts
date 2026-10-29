@@ -518,7 +518,7 @@ class SimulationEngine {
           ),
         );
 
-        if (similarity >= 0.65) {
+        if (similarity >= 0.58) {
           const candidate: SimDuplicateCandidate = {
             id: `dup-${crypto.randomUUID()}`,
             candidate_id: `dup-${crypto.randomUUID()}`,
