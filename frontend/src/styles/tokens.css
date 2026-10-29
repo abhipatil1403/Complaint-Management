@@ -1,64 +1,92 @@
-/* Design tokens for AICTE OneDesk.
- *
- * The interface uses hand-written CSS with custom properties instead of a
- * component framework. This keeps the dependency surface small and makes the
- * visual language explicit. Components only reference these tokens.
+/* AICTE OneDesk — Fernly Design Tokens
+ * Recreated faithfully from reference/designmd/designmd-demo-codeandchill-store/
  */
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&family=JetBrains+Mono:wght@400;600&display=swap');
 
 :root {
   color-scheme: light;
 
-  --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  /* Typography */
+  --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  --color-canvas: #eef2f7;
-  --color-surface: #ffffff;
-  --color-surface-muted: #f6f8fb;
+  /* Fernly Colors */
+  --color-canvas: #f5f6f5;
+  --color-surface: #fdfdfc;
+  --color-surface-white: #ffffff;
+  --color-surface-muted: #f0f2f0;
   --color-surface-raised: #ffffff;
 
-  --color-ink: #16222f;
-  --color-ink-soft: #415366;
-  --color-ink-muted: #6b7c8e;
+  --color-text-primary: #131a15;
+  --color-text-secondary: #646d67;
+  --color-text-muted: #8a958e;
   --color-inverse: #ffffff;
 
-  --color-border: #d9e1ea;
-  --color-border-strong: #bfccda;
+  --color-border: #e3e7e4;
+  --color-border-subtle: #edf0ee;
+  --color-border-strong: #c8d0cb;
 
-  --color-primary: #1c4f7c;
-  --color-primary-hover: #153e61;
-  --color-primary-soft: #e8f0f8;
+  /* AICTE Forest Green Brand Accents */
+  --color-accent: #155a37;
+  --color-accent-hover: #0d3a23;
+  --color-accent-active: #092818;
+  --color-accent-soft: #eaf5ee;
+  --color-accent-border: #c0e2d0;
 
-  --color-accent: #0f766e;
-  --color-accent-soft: #e6f4f2;
+  --color-green-mid: #5dbd8b;
+  --color-green-dark: #0d3a23;
+  --color-green-dark-2: #27865a;
 
-  --color-danger: #b42318;
-  --color-danger-hover: #912018;
+  /* Semantic State Colors */
+  --color-danger: #d92d20;
+  --color-danger-hover: #b42318;
   --color-danger-soft: #fef3f2;
-
-  --color-success: #067647;
-  --color-success-soft: #ecfdf3;
+  --color-danger-border: #fecdca;
 
   --color-warning: #b54708;
+  --color-warning-hover: #93370d;
   --color-warning-soft: #fffaeb;
+  --color-warning-border: #fedf89;
 
+  --color-info: #026aa2;
+  --color-info-soft: #f0f9ff;
+  --color-info-border: #b9e6fe;
+
+  --color-purple: #6941c6;
+  --color-purple-soft: #f9f5ff;
+  --color-purple-border: #e9d7fe;
+
+  --color-success: #079455;
+  --color-success-soft: #edfcf2;
+  --color-success-border: #a6f4c5;
+
+  /* Radii */
+  --radius-xs: 4px;
   --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
 
-  --shadow-sm: 0 1px 2px rgba(16, 34, 51, 0.06);
-  --shadow-md: 0 10px 30px rgba(16, 34, 51, 0.09);
+  /* Elevation Shadows */
+  --shadow-sm: rgba(19, 26, 21, 0.04) 0px 1px 2px 0px, rgba(19, 26, 21, 0.08) 0px 8px 24px -12px;
+  --shadow-md: rgba(19, 26, 21, 0.06) 0px 4px 12px 0px, rgba(19, 26, 21, 0.1) 0px 12px 32px -8px;
+  --shadow-lg: rgba(19, 26, 21, 0.1) 0px 16px 40px -10px;
+  --shadow-pill: 0 2px 8px rgba(19, 26, 21, 0.06);
 
+  /* Spacing */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --space-7: 40px;
-  --space-8: 56px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
 
-  --max-width: 1280px;
-  --focus-ring: 0 0 0 3px rgba(28, 79, 124, 0.22);
+  /* Transitions */
+  --ease-default: cubic-bezier(0.2, 0, 0, 1);
+  --duration-base: 200ms;
 }

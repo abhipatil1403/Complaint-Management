@@ -1,14 +1,17 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthProvider";
-import { EmptyState, ErrorPanel, Loading, PageHeader, StatusBadge } from "../components/ui";
+import {
+  EmptyState,
+  ErrorPanel,
+  Loading,
+  PageHeader,
+  StatusBadge,
+} from "../components/ui";
 import { formatDateTime } from "../lib/intake";
 import { usePagedResource } from "../lib/useResource";
-import {
-  duplicateStatusLabel,
-  heuristicLabel,
-} from "../lib/duplicateReview";
+import { duplicateStatusLabel, heuristicLabel } from "../lib/duplicateReview";
 import type { DuplicateCandidateItem } from "../types";
 import { PermissionDeniedPage } from "./PermissionDeniedPage";
 
@@ -22,20 +25,25 @@ const STATUS_FILTERS = [
 
 export function DuplicateReviewQueuePage() {
   const { has, api } = useAuth();
-  const [statusFilter, setStatusFilter] = useState("pending");
+  const [params] = useSearchParams();
+  const [statusFilter, setStatusFilter] = useState(
+    params.get("status") || "pending",
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [isScreening, setIsScreening] = useState(false);
   const [screeningSubmissionId, setScreeningSubmissionId] = useState("");
   const [screeningResult, setScreeningResult] = useState<string | null>(null);
 
-  const { items, loading, error, reload } = usePagedResource<DuplicateCandidateItem>(
-    "/duplicate-review/queue",
-    {
-      status: statusFilter,
-      q: searchQuery.trim() || undefined,
-    },
-    { enabled: has("duplicate.review") },
-  );
+  const { items, loading, error, reload } =
+    usePagedResource<DuplicateCandidateItem>(
+      "/duplicate-review/queue",
+      {
+        status: statusFilter,
+        confidence: params.get("confidence") || undefined,
+        q: searchQuery.trim() || undefined,
+      },
+      { enabled: has("duplicate.review") },
+    );
 
   if (!has("duplicate.review")) {
     return <PermissionDeniedPage />;
@@ -54,7 +62,9 @@ export function DuplicateReviewQueuePage() {
           expected_submission_updated_at: new Date().toISOString(),
         },
       );
-      setScreeningResult(`Screening complete: generated ${res.inserted_count} candidate pairs.`);
+      setScreeningResult(
+        `Screening complete: generated ${res.inserted_count} candidate pairs.`,
+      );
       setScreeningSubmissionId("");
       await reload();
     } catch (err: any) {
@@ -70,22 +80,32 @@ export function DuplicateReviewQueuePage() {
         title="Duplicate Review Queue"
         description="Review suspected duplicate submissions against existing canonical cases. Match evidence is deterministic and advisory; officer judgment is required."
         actions={
-          <button type="button" className="button button-quiet" onClick={() => void reload()}>
+          <button
+            type="button"
+            className="button button-quiet"
+            onClick={() => void reload()}
+          >
             Refresh
           </button>
         }
       />
 
       <div className="callout callout-info" style={{ marginBottom: "1rem" }}>
-        <strong>Mandatory Human Decision:</strong> System similarity scores (1.00, 0.90, 0.60) are deterministic heuristics, never automated auto-merges. Every duplicate candidate requires human decision.
+        <strong>Mandatory Human Decision:</strong> System similarity scores
+        (1.00, 0.90, 0.60) are deterministic heuristics, never automated
+        auto-merges. Every duplicate candidate requires human decision.
       </div>
 
       <div className="card" style={{ marginBottom: "1.5rem" }}>
         <h3 style={{ marginTop: 0 }}>Trigger Duplicate Screening</h3>
         <p className="hint">
-          Screen a verified intake submission against canonical cases for the same institution.
+          Screen a verified intake submission against canonical cases for the
+          same institution.
         </p>
-        <form onSubmit={handleRunScreening} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <form
+          onSubmit={handleRunScreening}
+          style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}
+        >
           <input
             type="text"
             placeholder="Submission UUID (e.g. 550e8400-...)"
@@ -93,12 +113,24 @@ export function DuplicateReviewQueuePage() {
             onChange={(e) => setScreeningSubmissionId(e.target.value)}
             style={{ width: "360px" }}
           />
-          <button type="submit" className="button button-primary" disabled={isScreening}>
+          <button
+            type="submit"
+            className="button button-primary"
+            disabled={isScreening}
+          >
             {isScreening ? "Screening..." : "Screen Submission"}
           </button>
         </form>
         {screeningResult && (
-          <div style={{ marginTop: "0.5rem", fontSize: "0.9rem", color: screeningResult.startsWith("Error") ? "var(--color-danger)" : "var(--color-success)" }}>
+          <div
+            style={{
+              marginTop: "0.5rem",
+              fontSize: "0.9rem",
+              color: screeningResult.startsWith("Error")
+                ? "var(--color-danger)"
+                : "var(--color-success)",
+            }}
+          >
             {screeningResult}
           </div>
         )}
@@ -165,8 +197,12 @@ export function DuplicateReviewQueuePage() {
                     <td>{candidate.submission_subject}</td>
                     <td>{candidate.institution_name || "—"}</td>
                     <td>
-                      <strong>{(candidate.similarity_score * 100).toFixed(0)}%</strong>
-                      <div className="hint">{heuristicLabel(candidate.similarity_score)}</div>
+                      <strong>
+                        {(candidate.similarity_score * 100).toFixed(0)}%
+                      </strong>
+                      <div className="hint">
+                        {heuristicLabel(candidate.similarity_score)}
+                      </div>
                     </td>
                     <td>
                       <StatusBadge

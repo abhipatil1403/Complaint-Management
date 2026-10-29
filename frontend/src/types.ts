@@ -100,7 +100,12 @@ export interface Alias {
   alias_name: string;
   normalized_alias: string;
   language_code: string;
-  alias_type: "alternate_name" | "former_name" | "abbreviation" | "spelling_variant" | "submitted_name";
+  alias_type:
+    | "alternate_name"
+    | "former_name"
+    | "abbreviation"
+    | "spelling_variant"
+    | "submitted_name";
   source_type: "manual" | "official_record" | "complaint_submission" | "import";
   source_reference: string | null;
   verification_status: VerificationStatus;
@@ -287,7 +292,11 @@ export interface DemoSubmissionReceipt {
 // ---------------------------------------------------------------------------
 // Phase 2.2 — human institution verification
 // ---------------------------------------------------------------------------
-export type VerificationTaskStatus = "pending" | "in_review" | "verified" | "rejected";
+export type VerificationTaskStatus =
+  | "pending"
+  | "in_review"
+  | "verified"
+  | "rejected";
 export type VerificationPriority = "low" | "normal" | "high" | "critical";
 export type VerificationRoundType = "new_round" | "correction";
 export type VerificationAction =
@@ -377,8 +386,15 @@ export interface CorrectionRoundPayload {
 /* Phase 2.3: Duplicate Review & Canonical Cases Types                        */
 /* -------------------------------------------------------------------------- */
 
-export type DuplicateCandidateStatus = "pending" | "confirmed_duplicate" | "not_duplicate" | "related";
-export type DuplicateReviewDecision = "confirmed_duplicate" | "not_duplicate" | "related";
+export type DuplicateCandidateStatus =
+  | "pending"
+  | "confirmed_duplicate"
+  | "not_duplicate"
+  | "related";
+export type DuplicateReviewDecision =
+  | "confirmed_duplicate"
+  | "not_duplicate"
+  | "related";
 export type CasePriority = "low" | "normal" | "high" | "critical";
 export type CaseVisibility = "restricted" | "confidential";
 
@@ -404,6 +420,7 @@ export interface DuplicateCandidateItem {
 }
 
 export interface DuplicateCandidateDetail {
+  case_content_accessible?: boolean;
   candidate_id: string;
   submission_id: string;
   submission_subject: string;
@@ -646,7 +663,13 @@ export interface CaseTransferItem {
   from_bureau_assignment_id: string | null;
   to_bureau_assignment_id: string | null;
   transfer_type: "handover" | "lead_change" | "reassignment" | string;
-  transfer_status: "pending" | "approved" | "rejected" | "completed" | "cancelled" | string;
+  transfer_status:
+    | "pending"
+    | "approved"
+    | "rejected"
+    | "completed"
+    | "cancelled"
+    | string;
   transfer_reason: string;
   initiated_by_user_id: string;
   initiated_at: string;
@@ -719,5 +742,3 @@ export interface CaseAccessGrantItem {
 export interface CaseAccessGrantRevokePayload {
   revocation_reason: string;
 }
-
-

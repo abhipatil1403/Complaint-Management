@@ -18,7 +18,9 @@ export function RequireAuth() {
   }
 
   if (auth.status === "signed_out") {
-    return <Navigate to="/sign-in" replace state={{ from: location.pathname }} />;
+    return (
+      <Navigate to="/sign-in" replace state={{ from: location.pathname }} />
+    );
   }
 
   if (auth.status === "no_profile") {
@@ -32,13 +34,18 @@ export function RequireAuth() {
         <div className="card">
           <ErrorPanel error={auth.error} title="AICTE OneDesk cannot start" />
           <p className="muted">
-            The interface is available, but no profile could be loaded. An administrator must
-            provision an account before access is possible.
+            The interface is available, but no profile could be loaded. An
+            administrator must provision an account before access is possible.
           </p>
         </div>
       </div>
     );
   }
 
+  if (
+    auth.activePersona.roleCode === "COMPLAINANT" &&
+    location.pathname !== "/portal"
+  )
+    return <Navigate to="/portal" replace />;
   return <Outlet />;
 }

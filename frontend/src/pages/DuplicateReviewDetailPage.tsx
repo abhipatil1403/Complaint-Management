@@ -10,7 +10,10 @@ import {
   duplicateStatusLabel,
   heuristicLabel,
 } from "../lib/duplicateReview";
-import type { DuplicateCandidateDetail, DuplicateReviewDecision } from "../types";
+import type {
+  DuplicateCandidateDetail,
+  DuplicateReviewDecision,
+} from "../types";
 import { PermissionDeniedPage } from "./PermissionDeniedPage";
 
 export function DuplicateReviewDetailPage() {
@@ -25,8 +28,14 @@ export function DuplicateReviewDetailPage() {
   const [rejectReason, setRejectReason] = useState("");
   const [showRejectModal, setShowRejectModal] = useState(false);
 
-  const { data: candidate, loading, error } = useResource<DuplicateCandidateDetail>(
-    has("duplicate.review") && candidateId ? `/duplicate-review/candidates/${candidateId}` : null,
+  const {
+    data: candidate,
+    loading,
+    error,
+  } = useResource<DuplicateCandidateDetail>(
+    has("duplicate.review") && candidateId
+      ? `/duplicate-review/candidates/${candidateId}`
+      : null,
   );
 
   if (!has("duplicate.review")) {
@@ -48,18 +57,23 @@ export function DuplicateReviewDetailPage() {
 
   const handleMakeDecision = async (action: DuplicateReviewDecision) => {
     if (!decisionNotes.trim() || decisionNotes.trim().length < 3) {
-      setActionError("Explicit justification notes (minimum 3 characters) are required for every duplicate decision.");
+      setActionError(
+        "Explicit justification notes (minimum 3 characters) are required for every duplicate decision.",
+      );
       return;
     }
     setIsSubmitting(true);
     setActionError(null);
     try {
-      await api.post(`/duplicate-review/candidates/${candidate.candidate_id}/decide`, {
-        action,
-        notes: decisionNotes.trim(),
-        expected_submission_updated_at: candidate.submission_updated_at,
-        expected_candidate_updated_at: candidate.candidate_updated_at,
-      });
+      await api.post(
+        `/duplicate-review/candidates/${candidate.candidate_id}/decide`,
+        {
+          action,
+          notes: decisionNotes.trim(),
+          expected_submission_updated_at: candidate.submission_updated_at,
+          expected_candidate_updated_at: candidate.candidate_updated_at,
+        },
+      );
       navigate("/duplicate-review");
     } catch (err: any) {
       setActionError(err?.message || "Failed to record decision.");
@@ -71,16 +85,21 @@ export function DuplicateReviewDetailPage() {
   const handleRejectSubmission = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!rejectReason.trim() || rejectReason.trim().length < 3) {
-      setActionError("A formal rejection reason (minimum 3 characters) is required.");
+      setActionError(
+        "A formal rejection reason (minimum 3 characters) is required.",
+      );
       return;
     }
     setIsSubmitting(true);
     setActionError(null);
     try {
-      await api.post(`/duplicate-review/submissions/${candidate.submission_id}/reject`, {
-        reason: rejectReason.trim(),
-        expected_submission_updated_at: candidate.submission_updated_at,
-      });
+      await api.post(
+        `/duplicate-review/submissions/${candidate.submission_id}/reject`,
+        {
+          reason: rejectReason.trim(),
+          expected_submission_updated_at: candidate.submission_updated_at,
+        },
+      );
       setShowRejectModal(false);
       navigate("/duplicate-review");
     } catch (err: any) {
@@ -90,7 +109,9 @@ export function DuplicateReviewDetailPage() {
     }
   };
 
-  const isPending = candidate.review_status === "pending";
+  const isPending =
+    candidate.review_status === "pending" &&
+    candidate.case_content_accessible !== false;
 
   return (
     <section>
@@ -107,14 +128,23 @@ export function DuplicateReviewDetailPage() {
       />
 
       {actionError && (
-        <div className="callout callout-danger" style={{ marginBottom: "1rem" }}>
+        <div
+          className="callout callout-danger"
+          style={{ marginBottom: "1rem" }}
+        >
           {actionError}
         </div>
       )}
 
       {/* Review Status Banner */}
       <div className="card" style={{ marginBottom: "1rem" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
           <div>
             <strong>Review Status: </strong>
             <StatusBadge
@@ -124,7 +154,10 @@ export function DuplicateReviewDetailPage() {
           </div>
           <div>
             <strong>Score: </strong>
-            <span>{(candidate.similarity_score * 100).toFixed(0)}% ({heuristicLabel(candidate.similarity_score)})</span>
+            <span>
+              {(candidate.similarity_score * 100).toFixed(0)}% (
+              {heuristicLabel(candidate.similarity_score)})
+            </span>
           </div>
         </div>
         {candidate.reviewed_at && (
@@ -136,7 +169,14 @@ export function DuplicateReviewDetailPage() {
       </div>
 
       {/* Side-by-Side Comparison Grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.5rem", marginBottom: "1.5rem" }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "1.5rem",
+          marginBottom: "1.5rem",
+        }}
+      >
         {/* Left Column: Intake Submission */}
         <div className="card">
           <h3 style={{ marginTop: 0 }}>Intake Submission</h3>
@@ -152,7 +192,7 @@ export function DuplicateReviewDetailPage() {
             <div>{candidate.submission_category_name || "Unassigned"}</div>
           </div>
           <div style={{ marginBottom: "1rem" }}>
-            <strong>Last Updated (Lock Check):</strong>
+            <strong>Last updated:</strong>
             <div>{formatDateTime(candidate.submission_updated_at)}</div>
           </div>
           <div>
@@ -176,7 +216,13 @@ export function DuplicateReviewDetailPage() {
 
         {/* Right Column: Candidate Target Case */}
         <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+            }}
+          >
             <h3 style={{ marginTop: 0 }}>Candidate Canonical Case</h3>
             <span className="badge badge-neutral">{candidate.case_status}</span>
           </div>
@@ -202,33 +248,50 @@ export function DuplicateReviewDetailPage() {
 
           <div>
             <strong>Matching Signals:</strong>
-            <pre
-              style={{
-                marginTop: "0.5rem",
-                padding: "0.75rem",
-                background: "var(--color-bg-subtle, #f5f5f5)",
-                borderRadius: "4px",
-                fontSize: "0.85rem",
-                maxHeight: "150px",
-                overflowY: "auto",
-              }}
-            >
-              {JSON.stringify(candidate.matching_signals, null, 2)}
-            </pre>
+            <ul className="match-reasons">
+              {Object.entries(candidate.matching_signals).map(
+                ([key, value]) => (
+                  <li key={key}>
+                    <strong>{key.replace(/_/g, " ")}</strong>:{" "}
+                    {Array.isArray(value)
+                      ? value.join(", ")
+                      : typeof value === "boolean"
+                        ? value
+                          ? "Match"
+                          : "Different"
+                        : typeof value === "number"
+                          ? `${Math.round(value * 100)}%`
+                          : String(value)}
+                  </li>
+                ),
+              )}
+            </ul>
           </div>
         </div>
       </div>
 
+      {candidate.case_content_accessible === false && (
+        <div className="callout callout-warning">
+          The candidate is outside your case-content scope.{" "}
+          <Link to={`/cases/${candidate.candidate_case_id}`}>
+            Request authorized case access
+          </Link>{" "}
+          before recording a comparison decision.
+        </div>
+      )}
       {/* Decision Section */}
       {isPending && (
         <div className="card">
           <h3>Record Human Review Decision</h3>
           <p className="hint">
-            Select one of the three verified decision actions. Explicit justification is required.
+            Select one of the three verified decision actions. Explicit
+            justification is required.
           </p>
 
           <div style={{ marginBottom: "1rem" }}>
-            <label htmlFor="decisionNotes">Decision Notes / Justification * (Required)</label>
+            <label htmlFor="decisionNotes">
+              Decision Notes / Justification * (Required)
+            </label>
             <textarea
               id="decisionNotes"
               rows={3}
@@ -239,7 +302,14 @@ export function DuplicateReviewDetailPage() {
             />
           </div>
 
-          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+          <div
+            style={{
+              display: "flex",
+              gap: "0.75rem",
+              flexWrap: "wrap",
+              alignItems: "center",
+            }}
+          >
             <button
               type="button"
               className="button button-danger"
@@ -296,10 +366,14 @@ export function DuplicateReviewDetailPage() {
             zIndex: 1000,
           }}
         >
-          <div className="card" style={{ maxWidth: "500px", width: "90%", background: "#fff" }}>
+          <div
+            className="card"
+            style={{ maxWidth: "500px", width: "90%", background: "#fff" }}
+          >
             <h3>Reject Intake Submission</h3>
             <p className="hint">
-              This will mark the intake submission as rejected with the reason recorded. This action requires global SUBMISSION.REJECT authority.
+              This will mark the intake submission as rejected with the reason
+              recorded. This action requires global SUBMISSION.REJECT authority.
             </p>
             <form onSubmit={handleRejectSubmission}>
               <div style={{ marginBottom: "1rem" }}>
@@ -313,7 +387,13 @@ export function DuplicateReviewDetailPage() {
                   style={{ width: "100%", marginTop: "0.25rem" }}
                 />
               </div>
-              <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "0.5rem",
+                  justifyContent: "flex-end",
+                }}
+              >
                 <button
                   type="button"
                   className="button button-quiet"

@@ -10,7 +10,7 @@ import {
 } from "react";
 import type { Session } from "@supabase/supabase-js";
 
-import { ApiClient, ApiError, toApiError } from "../lib/api";
+import { ApiClient, ApiError, IS_PROTOTYPE_MODE, toApiError } from "../lib/api";
 import {
   apiBaseUrl,
   readStoredBureau,
@@ -18,9 +18,16 @@ import {
   supabaseConfigured,
   writeStoredBureau,
 } from "../lib/supabase";
+import { simulationStore } from "../simulation/simulationStore";
+import type { Persona } from "../simulation/types";
 import type { MeResponse } from "../types";
 
-export type AuthStatus = "loading" | "signed_out" | "no_profile" | "ready" | "error";
+export type AuthStatus =
+  | "loading"
+  | "signed_out"
+  | "no_profile"
+  | "ready"
+  | "error";
 
 export interface AuthContextValue {
   status: AuthStatus;
@@ -31,8 +38,17 @@ export interface AuthContextValue {
   isSuperAdmin: boolean;
   selectBureau: (bureauId: string | null) => Promise<void>;
   signOut: () => Promise<void>;
+  signInPersona: (personaKey: string) => Promise<void>;
+  switchPersona: (personaKey: string) => void;
+  activePersona: Persona;
+  personas: Record<string, Persona>;
+  simulatedClock: string;
+  advanceTime: (days: number) => void;
+  resetTime: () => void;
+  resetData: () => void;
   reload: () => void;
   configured: boolean;
+  isPrototype: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -40,11 +56,18 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [bootstrapped, setBootstrapped] = useState(false);
-  const [status, setStatus] = useState<AuthStatus>("loading");
+  const [status, setStatus] = useState<AuthStatus>(() =>
+    IS_PROTOTYPE_MODE && sessionStorage.getItem("onedesk-signed-out") === "true"
+      ? "signed_out"
+      : "loading",
+  );
   const [me, setMe] = useState<MeResponse | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
-  const [activeBureauId, setActiveBureauId] = useState<string | null>(() => readStoredBureau());
+  const [activeBureauId, setActiveBureauId] = useState<string | null>(() =>
+    readStoredBureau(),
+  );
   const [reloadCounter, setReloadCounter] = useState(0);
+  const [simState, setSimState] = useState(() => simulationStore.getState());
 
   const bureauRef = useRef<string | null>(activeBureauId);
   bureauRef.current = activeBureauId;
@@ -52,11 +75,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const sessionRef = useRef<Session | null>(session);
   sessionRef.current = session;
 
+  // Listen to simulationStore updates
+  useEffect(() => {
+    if (!IS_PROTOTYPE_MODE) return;
+    const unsub = simulationStore.subscribe(() => {
+      setSimState({ ...simulationStore.getState() });
+      setReloadCounter((v) => v + 1);
+    });
+    return unsub;
+  }, []);
+
   const api = useMemo(
     () =>
       new ApiClient({
         baseUrl: apiBaseUrl,
         getAccessToken: async () => {
+          if (IS_PROTOTYPE_MODE) {
+            return "simulated-prototype-jwt-token";
+          }
           if (sessionRef.current?.access_token) {
             return sessionRef.current.access_token;
           }
@@ -72,6 +108,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
+    if (IS_PROTOTYPE_MODE) {
+      setBootstrapped(true);
+      return;
+    }
     if (!supabase) {
       setBootstrapped(true);
       return;
@@ -84,17 +124,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSession(data.session ?? null);
       setBootstrapped(true);
     });
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession((current) => {
-        if (
-          current?.access_token === nextSession?.access_token &&
-          current?.user?.id === nextSession?.user?.id
-        ) {
-          return current;
-        }
-        return nextSession;
-      });
-    });
+    const { data: subscription } = supabase.auth.onAuthStateChange(
+      (_event, nextSession) => {
+        setSession((current) => {
+          if (
+            current?.access_token === nextSession?.access_token &&
+            current?.user?.id === nextSession?.user?.id
+          ) {
+            return current;
+          }
+          return nextSession;
+        });
+      },
+    );
     return () => {
       mounted = false;
       subscription.subscription.unsubscribe();
@@ -110,6 +152,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!bootstrapped) {
       return;
     }
+
+    if (IS_PROTOTYPE_MODE) {
+      if (status === "signed_out") {
+        return;
+      }
+      let cancelled = false;
+      async function loadSimulatedProfile() {
+        try {
+          const nextMe = await api.get<MeResponse>("/me");
+          if (cancelled) return;
+          setMe(nextMe);
+          setError(null);
+          setStatus("ready");
+        } catch (raw) {
+          if (cancelled) return;
+          setError(toApiError(raw));
+          setStatus("error");
+        }
+      }
+      void loadSimulatedProfile();
+      return () => {
+        cancelled = true;
+      };
+    }
+
     if (!supabaseConfigured || !supabase) {
       setMe(null);
       setError(
@@ -133,12 +200,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const requestedBureau = activeBureauId;
 
     async function loadProfile() {
-      // Only show visible gate if we do not already have an authenticated profile
       if (!meRef.current) {
         setStatus("loading");
       }
       try {
-        const nextMe = await api.get<MeResponse>("/me", undefined, requestedBureau);
+        const nextMe = await api.get<MeResponse>(
+          "/me",
+          undefined,
+          requestedBureau,
+        );
         if (cancelled) {
           return;
         }
@@ -155,8 +225,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
         const apiError = toApiError(raw);
-        if (apiError.code === "BUREAU_CONTEXT_DENIED" && requestedBureau !== null) {
-          // The stored bureau is no longer a membership: fall back to no context.
+        if (
+          apiError.code === "BUREAU_CONTEXT_DENIED" &&
+          requestedBureau !== null
+        ) {
           writeStoredBureau(null);
           setActiveBureauId(null);
           return;
@@ -165,12 +237,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await supabase!.auth.signOut();
           return;
         }
-        // If we already have a profile in memory, preserve it during transient errors
         if (!meRef.current) {
           setMe(null);
           setError(apiError);
           setStatus(
-            apiError.code === "ACCOUNT_NOT_PROVISIONED" || apiError.code === "ACCOUNT_INACTIVE"
+            apiError.code === "ACCOUNT_NOT_PROVISIONED" ||
+              apiError.code === "ACCOUNT_INACTIVE"
               ? "no_profile"
               : "error",
           );
@@ -182,10 +254,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [api, activeBureauId, bootstrapped, reloadCounter, session]);
+  }, [
+    api,
+    activeBureauId,
+    bootstrapped,
+    reloadCounter,
+    session,
+    simState.activePersonaKey,
+  ]);
 
   const has = useCallback(
-    (permission: string) => me?.permissions.includes(permission) ?? false,
+    (permission: string) =>
+      IS_PROTOTYPE_MODE
+        ? simulationStore.getActivePersona().permissions.includes(permission)
+        : (me?.permissions.includes(permission) ?? false),
     [me],
   );
 
@@ -195,8 +277,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setActiveBureauId(bureauId);
   }, []);
 
+  const switchPersona = useCallback((personaKey: string) => {
+    sessionStorage.removeItem("onedesk-signed-out");
+    simulationStore.switchPersona(personaKey);
+    setStatus("ready");
+    setReloadCounter((v) => v + 1);
+  }, []);
+
+  const signInPersona = useCallback(async (personaKey: string) => {
+    sessionStorage.removeItem("onedesk-signed-out");
+    simulationStore.switchPersona(personaKey);
+    setStatus("ready");
+    setReloadCounter((v) => v + 1);
+  }, []);
+
   const signOut = useCallback(async () => {
-    if (supabase) {
+    sessionStorage.setItem("onedesk-signed-out", "true");
+    if (!IS_PROTOTYPE_MODE && supabase) {
       await supabase.auth.signOut();
     }
     writeStoredBureau(null);
@@ -206,6 +303,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     setSession(null);
     setStatus("signed_out");
+  }, []);
+
+  const advanceTime = useCallback((days: number) => {
+    simulationStore.advanceSimulatedClock(days);
+  }, []);
+
+  const resetTime = useCallback(() => {
+    simulationStore.resetSimulatedClock();
+  }, []);
+
+  const resetData = useCallback(() => {
+    simulationStore.resetPresentationData();
   }, []);
 
   const reload = useCallback(() => setReloadCounter((value) => value + 1), []);
@@ -220,10 +329,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isSuperAdmin: me?.is_super_admin ?? false,
       selectBureau,
       signOut,
+      signInPersona,
+      switchPersona,
+      activePersona: simulationStore.getActivePersona(),
+      personas: simState.personas,
+      simulatedClock: simState.simulatedClock,
+      advanceTime,
+      resetTime,
+      resetData,
       reload,
-      configured: supabaseConfigured,
+      configured: true,
+      isPrototype: IS_PROTOTYPE_MODE,
     }),
-    [api, error, has, me, reload, selectBureau, signOut, status],
+    [
+      api,
+      error,
+      has,
+      me,
+      reload,
+      selectBureau,
+      signOut,
+      signInPersona,
+      switchPersona,
+      status,
+      simState,
+      advanceTime,
+      resetTime,
+      resetData,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

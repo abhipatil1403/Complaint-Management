@@ -1,8 +1,14 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthProvider";
-import { EmptyState, ErrorPanel, Loading, PageHeader, StatusBadge } from "../components/ui";
+import {
+  EmptyState,
+  ErrorPanel,
+  Loading,
+  PageHeader,
+  StatusBadge,
+} from "../components/ui";
 import { formatDateTime } from "../lib/intake";
 import { usePagedResource } from "../lib/useResource";
 import {
@@ -11,7 +17,11 @@ import {
   roundTypeLabel,
   taskStatusLabel,
 } from "../lib/verification";
-import type { VerificationPriority, VerificationTask, VerificationTaskStatus } from "../types";
+import type {
+  VerificationPriority,
+  VerificationTask,
+  VerificationTaskStatus,
+} from "../types";
 import { PermissionDeniedPage } from "./PermissionDeniedPage";
 
 const STATUS_FILTERS = [
@@ -29,7 +39,10 @@ const ASSIGNMENT_FILTERS = [
   { value: "unassigned", label: "Unassigned only" },
 ];
 
-const PRIORITY_FILTERS: Array<{ value: VerificationPriority | ""; label: string }> = [
+const PRIORITY_FILTERS: Array<{
+  value: VerificationPriority | "";
+  label: string;
+}> = [
   { value: "", label: "All priorities" },
   { value: "critical", label: "Critical" },
   { value: "high", label: "High" },
@@ -39,23 +52,29 @@ const PRIORITY_FILTERS: Array<{ value: VerificationPriority | ""; label: string 
 
 export function VerificationPage() {
   const { has } = useAuth();
-  const [statusFilter, setStatusFilter] = useState("open");
+  const [params] = useSearchParams();
+  const [statusFilter, setStatusFilter] = useState(
+    params.get("status") || "open",
+  );
   const [assignment, setAssignment] = useState("all");
   const [priority, setPriority] = useState<VerificationPriority | "">("");
   const [searchQuery, setSearchQuery] = useState("");
   const [sort, setSort] = useState("oldest");
 
-  const { items, loading, error, hasMore, reload, loadMore } = usePagedResource<VerificationTask>(
-    "/verification/tasks",
-    {
-      status: statusFilter,
-      assignment,
-      priority: priority || undefined,
-      q: searchQuery.trim() || undefined,
-      sort,
-    },
-    { enabled: has("institution.verify") },
-  );
+  const { items, loading, error, hasMore, reload, loadMore } =
+    usePagedResource<VerificationTask>(
+      "/verification/tasks",
+      {
+        status: statusFilter,
+        corrections_only:
+          params.get("corrections") === "true" ? true : undefined,
+        assignment,
+        priority: priority || undefined,
+        q: searchQuery.trim() || undefined,
+        sort,
+      },
+      { enabled: has("institution.verify") },
+    );
 
   if (!has("institution.verify")) {
     return <PermissionDeniedPage />;
@@ -67,16 +86,21 @@ export function VerificationPage() {
         title="Institution verification queue"
         description="Verify submitted institution identities before duplicate matching or case creation. Advisory evidence must be reviewed by an authorized officer."
         actions={
-          <button type="button" className="button button-quiet" onClick={() => void reload()}>
+          <button
+            type="button"
+            className="button button-quiet"
+            onClick={() => void reload()}
+          >
             Refresh
           </button>
         }
       />
 
       <div className="callout callout-warning">
-        <strong>Mandatory human review:</strong> Candidate matches and permanent ID evidence are advisory only.
-        The AICTE OneDesk verification contract forbids automatic case association; an authorized reviewer
-        must explicitly select the institution and record a reason.
+        <strong>Mandatory human review:</strong> Candidate matches and permanent
+        ID evidence are advisory only. The AICTE OneDesk verification contract
+        forbids automatic case association; an authorized reviewer must
+        explicitly select the institution and record a reason.
       </div>
 
       <div className="card">
@@ -114,7 +138,9 @@ export function VerificationPage() {
             Priority
             <select
               value={priority}
-              onChange={(event) => setPriority(event.target.value as VerificationPriority | "")}
+              onChange={(event) =>
+                setPriority(event.target.value as VerificationPriority | "")
+              }
             >
               {PRIORITY_FILTERS.map((f) => (
                 <option key={f.value} value={f.value}>
@@ -126,7 +152,10 @@ export function VerificationPage() {
 
           <label>
             Order
-            <select value={sort} onChange={(event) => setSort(event.target.value)}>
+            <select
+              value={sort}
+              onChange={(event) => setSort(event.target.value)}
+            >
               <option value="oldest">Oldest first (FIFO)</option>
               <option value="recent">Most recent first</option>
             </select>
@@ -164,7 +193,9 @@ export function VerificationPage() {
                   <th scope="col">Evidence</th>
                   <th scope="col">Assigned To</th>
                   <th scope="col">Status</th>
-                  <th scope="col" className="align-right">Action</th>
+                  <th scope="col" className="align-right">
+                    Action
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -172,20 +203,28 @@ export function VerificationPage() {
                   <tr key={task.id}>
                     <td>
                       <div>
-                        <strong>{task.submission.external_reference || "Ref pending"}</strong>
+                        <strong>
+                          {task.submission.external_reference || "Ref pending"}
+                        </strong>
                       </div>
-                      <small className="muted">{formatDateTime(task.submission.received_at)}</small>
+                      <small className="muted">
+                        {formatDateTime(task.submission.received_at)}
+                      </small>
                     </td>
                     <td>
                       <div>
                         <strong>{task.submitted_institution_name}</strong>
                       </div>
                       {task.submitted_permanent_id ? (
-                        <small className="muted">Permanent ID: {task.submitted_permanent_id}</small>
+                        <small className="muted">
+                          Permanent ID: {task.submitted_permanent_id}
+                        </small>
                       ) : null}
                     </td>
                     <td>
-                      <span className="badge badge-neutral">{roundTypeLabel(task.round_type)}</span>
+                      <span className="badge badge-neutral">
+                        {roundTypeLabel(task.round_type)}
+                      </span>
                     </td>
                     <td>
                       <div>
@@ -203,7 +242,9 @@ export function VerificationPage() {
                       ) : (
                         <small className="muted">No candidate match</small>
                       )}
-                      <small className="muted">{task.candidate_count} candidate(s)</small>
+                      <small className="muted">
+                        {task.candidate_count} candidate(s)
+                      </small>
                     </td>
                     <td>
                       {task.assigned_to_name || (
@@ -213,7 +254,9 @@ export function VerificationPage() {
                     <td>
                       <StatusBadge
                         value={task.status}
-                        label={taskStatusLabel(task.status as VerificationTaskStatus)}
+                        label={taskStatusLabel(
+                          task.status as VerificationTaskStatus,
+                        )}
                       />
                     </td>
                     <td className="align-right">

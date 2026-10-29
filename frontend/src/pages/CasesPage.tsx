@@ -1,346 +1,638 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
-
+import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
-import { EmptyState, ErrorPanel, Loading, PageHeader, StatusBadge } from "../components/ui";
-import { formatDateTime } from "../lib/intake";
-import { usePagedResource } from "../lib/useResource";
 import {
-  caseStatusLabel,
-  severityLabel,
-} from "../lib/cases";
-import type { CaseIndexItem, CasePriority } from "../types";
-import { PermissionDeniedPage } from "./PermissionDeniedPage";
+  IconClock,
+  IconKanban,
+  IconPlus,
+  IconSearch,
+  IconTable,
+} from "../components/Icons";
+import {
+  useSimulation,
+  isResolved,
+  canReadCase,
+} from "../simulation/selectors";
+import { scopedState, accessibleSubmissions } from "../simulation/scope";
+import { simulationStore } from "../simulation/simulationStore";
+import type { CasePriority, CaseStatus } from "../simulation/types";
 
-const STATUS_FILTERS = [
-  { value: "all", label: "All Statuses" },
-  { value: "new", label: "New" },
-  { value: "under_review", label: "Under Review" },
-  { value: "assigned", label: "Assigned" },
-  { value: "in_progress", label: "In Progress" },
-  { value: "awaiting_information", label: "Awaiting Information" },
-  { value: "resolved", label: "Resolved" },
-  { value: "closed", label: "Closed" },
-  { value: "reopened", label: "Reopened" },
-];
-
-const KANBAN_COLUMNS = [
-  { id: "new", title: "New" },
-  { id: "under_review", title: "Under Review" },
-  { id: "assigned", title: "Assigned" },
-  { id: "in_progress", title: "In Progress" },
-  { id: "awaiting_information", title: "Awaiting Info" },
-  { id: "resolved", title: "Resolved" },
-  { id: "closed", title: "Closed" },
+const KANBAN_STAGES: Array<{ id: CaseStatus; title: string; color: string }> = [
+  { id: "new", title: "New", color: "#eab308" },
+  { id: "under_review", title: "Under Review", color: "#f97316" },
+  { id: "assigned", title: "Assigned", color: "#3b82f6" },
+  { id: "in_progress", title: "In Progress", color: "#155a37" },
+  { id: "awaiting_information", title: "Awaiting Info", color: "#8b5cf6" },
+  { id: "resolved", title: "Resolved", color: "#10b981" },
+  { id: "reopened", title: "Reopened", color: "#b54708" },
+  { id: "closed", title: "Closed", color: "#6b7280" },
 ];
 
 export function CasesPage() {
-  const { has, api } = useAuth();
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
+  const { has, activePersona, simulatedClock } = useAuth();
+  const [viewMode, setViewMode] = useState<"kanban" | "table">("kanban");
+  const [filterPill, setFilterPill] = useState<
+    "all" | "my_bureau" | "high_priority" | "due_soon"
+  >("all");
+  const [params] = useSearchParams();
+  const [searchQuery, setSearchQuery] = useState(params.get("search") || "");
+  const [createError, setCreateError] = useState("");
 
-  // Create Case Modal State
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [sourceSubmissionId, setSourceSubmissionId] = useState("");
-  const [primaryBureauId, setPrimaryBureauId] = useState("");
-  const [caseTitle, setCaseTitle] = useState("");
-  const [caseDescription, setCaseDescription] = useState("");
+  // Create Case Modal
+  const [showCreateModal, setShowCreateModal] = useState(
+    Boolean(params.get("createFrom")) && has("case.create"),
+  );
+  const [sourceSubId, setSourceSubId] = useState(
+    params.get("createFrom") || "",
+  );
+  const [leadBureauId, setLeadBureauId] = useState(
+    activePersona.bureauId || "",
+  );
+  const [caseTitle, setCaseTitle] = useState(
+    () =>
+      accessibleSubmissions(simulationStore.getState(), activePersona).find(
+        (s) => s.id === params.get("createFrom"),
+      )?.subject || "",
+  );
+  const [caseDesc, setCaseDesc] = useState(
+    () =>
+      accessibleSubmissions(simulationStore.getState(), activePersona).find(
+        (s) => s.id === params.get("createFrom"),
+      )?.description || "",
+  );
   const [priority, setPriority] = useState<CasePriority>("normal");
-  const [createError, setCreateError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const { items, loading, error, reload } = usePagedResource<CaseIndexItem>(
-    "/cases",
-    {
-      status: statusFilter === "all" ? undefined : statusFilter,
-      search: searchQuery.trim() || undefined,
-    },
-    { enabled: has("case.view_index") || has("case.view_detail") },
-  );
+  const state = useSimulation();
 
-  if (!has("case.view_index") && !has("case.view_detail")) {
-    return <PermissionDeniedPage />;
-  }
-
-  const handleCreateCase = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!sourceSubmissionId.trim() || !primaryBureauId.trim() || !caseTitle.trim() || !caseDescription.trim()) {
-      setCreateError("Please fill in all required fields.");
-      return;
+  // Filter cases
+  const filteredCases = (
+    params.get("index") === "all" && has("case.view_index")
+      ? state.cases
+      : scopedState(state, activePersona).cases
+  ).filter((c) => {
+    if (params.get("scope") === "completed" && !isResolved(c)) return false;
+    if (
+      params.get("leadBureau") &&
+      c.lead_bureau_id !== params.get("leadBureau")
+    )
+      return false;
+    if (
+      params.get("scope") === "due_soon" &&
+      (isResolved(c) ||
+        Date.parse(c.target_resolution_date) < Date.parse(simulatedClock) ||
+        Date.parse(c.target_resolution_date) >
+          Date.parse(simulatedClock) + 5 * 86400000)
+    )
+      return false;
+    if (params.get("priority") && c.priority !== params.get("priority"))
+      return false;
+    if (params.get("hasEvidence") === "true" && !c.attachments.length)
+      return false;
+    if (
+      params.get("unassigned") === "true" &&
+      (isResolved(c) ||
+        c.officer_assignments.some(
+          (o) =>
+            o.status === "active" && o.bureau_id === activePersona.bureauId,
+        ))
+    )
+      return false;
+    if (params.get("scope") === "active" && isResolved(c)) return false;
+    if (
+      params.get("scope") === "overdue" &&
+      (isResolved(c) ||
+        Date.parse(c.target_resolution_date) >= Date.parse(simulatedClock))
+    )
+      return false;
+    if (params.get("status") && c.status !== params.get("status")) return false;
+    if (
+      params.get("bureau") &&
+      c.lead_bureau_id !== params.get("bureau") &&
+      !c.collaborating_bureaus.some(
+        (b) =>
+          b.bureau_id === params.get("bureau") &&
+          b.assignment_status === "active",
+      )
+    )
+      return false;
+    if (
+      params.get("officer") &&
+      !c.officer_assignments.some(
+        (o) => o.officer_id === params.get("officer") && o.status === "active",
+      )
+    )
+      return false;
+    // Search
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      const matches =
+        c.case_number.toLowerCase().includes(q) ||
+        (canReadCase(c, activePersona, state) &&
+          c.title.toLowerCase().includes(q)) ||
+        c.institution_name.toLowerCase().includes(q) ||
+        c.category_name.toLowerCase().includes(q);
+      if (!matches) return false;
     }
+
+    // Filter pills
+    if (filterPill === "my_bureau") {
+      if (!activePersona.bureauId) return true;
+      return (
+        c.lead_bureau_id === activePersona.bureauId ||
+        c.collaborating_bureaus.some(
+          (cb) => cb.bureau_id === activePersona.bureauId,
+        )
+      );
+    }
+
+    if (filterPill === "high_priority") {
+      return c.priority === "high" || c.priority === "critical";
+    }
+
+    if (filterPill === "due_soon") {
+      if (c.status === "resolved" || c.status === "closed") return false;
+      const now = new Date(simulatedClock).getTime();
+      const target = new Date(c.target_resolution_date).getTime();
+      const diff = (target - now) / (1000 * 60 * 60 * 24);
+      return diff <= 5;
+    }
+
+    return true;
+  });
+
+  // Handle Create Case Form
+  const handleCreateCase = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!caseTitle.trim() || !caseDesc.trim()) return;
+
     setIsSubmitting(true);
-    setCreateError(null);
     try {
-      await api.post("/cases", {
-        submission_id: sourceSubmissionId.trim(),
-        lead_bureau_id: primaryBureauId.trim(),
+      simulationStore.createCanonicalCase({
+        submission_id: sourceSubId,
+        lead_bureau_id:
+          leadBureauId || activePersona.bureauId || state.bureaus[0].id,
         title: caseTitle.trim(),
-        description: caseDescription.trim(),
+        description: caseDesc.trim(),
         priority,
-        visibility: "restricted",
-        expected_submission_updated_at: new Date().toISOString(),
       });
       setShowCreateModal(false);
-      setSourceSubmissionId("");
-      setPrimaryBureauId("");
       setCaseTitle("");
-      setCaseDescription("");
-      await reload();
-    } catch (err: any) {
-      setCreateError(err?.message || "Failed to create canonical case.");
+      setCaseDesc("");
+    } catch (error) {
+      setCreateError(
+        error instanceof Error ? error.message : "Could not create case.",
+      );
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  // Helper for deadline countdown
+  const getRemainingTimeDisplay = (
+    targetDateStr: string,
+    status: CaseStatus,
+  ) => {
+    if (status === "resolved" || status === "closed") {
+      return { text: "Disposed", isOverdue: false, isWarning: false };
+    }
+    const now = new Date(simulatedClock).getTime();
+    const target = new Date(targetDateStr).getTime();
+    const diffDays = Math.ceil((target - now) / (1000 * 60 * 60 * 24));
+
+    if (target < now) {
+      return {
+        text: `${Math.max(1, Math.ceil((now - target) / 86400000))}d overdue`,
+        isOverdue: true,
+        isWarning: true,
+      };
+    }
+    if (diffDays <= 2) {
+      return {
+        text: `In ${diffDays} day${diffDays === 1 ? "" : "s"}`,
+        isOverdue: false,
+        isWarning: true,
+      };
+    }
+    return { text: `In ${diffDays} days`, isOverdue: false, isWarning: false };
+  };
+
   return (
-    <section>
-      <PageHeader
-        title="AICTE Canonical Cases"
-        description="Cross-bureau complaint monitoring index. Full complaint details are restricted to authorized bureaus."
-        actions={
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <div style={{ display: "flex", border: "1px solid var(--color-border)", borderRadius: "4px", overflow: "hidden" }}>
-              <button
-                type="button"
-                className={`button button-small ${viewMode === "table" ? "button-primary" : "button-quiet"}`}
-                onClick={() => setViewMode("table")}
-              >
-                Table View
-              </button>
-              <button
-                type="button"
-                className={`button button-small ${viewMode === "kanban" ? "button-primary" : "button-quiet"}`}
-                onClick={() => setViewMode("kanban")}
-              >
-                Kanban View
-              </button>
-            </div>
-            <button type="button" className="button button-quiet" onClick={() => void reload()}>
-              Refresh
-            </button>
-            {has("case.create") && (
-              <button
-                type="button"
-                className="button button-primary"
-                onClick={() => setShowCreateModal(true)}
-              >
-                + Create Canonical Case
-              </button>
-            )}
-          </div>
-        }
-      />
-
-      <div className="card">
-        <div className="toolbar toolbar-wrap">
-          <h2>Case Directory</h2>
-          <label>
-            Status
-            <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
-            >
-              {STATUS_FILTERS.map((f) => (
-                <option key={f.value} value={f.value}>
-                  {f.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            Search
-            <input
-              type="search"
-              placeholder="Case number, institution, or category"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-            />
-          </label>
+    <div>
+      {/* Header matching Fernly Reference 01 */}
+      <div className="page-header">
+        <div className="page-header-info">
+          <h1>Cases Workspace</h1>
+          <p>Triage, assign, collaborate, and monitor complaint lifecycles.</p>
         </div>
 
-        {error && <ErrorPanel error={error} />}
-        {loading && <Loading label="Loading canonical cases..." />}
+        <div className="page-header-actions">
+          {/* View toggle (Kanban vs Table) */}
+          <div className="pill-tabs">
+            <button
+              type="button"
+              className={`pill-tab ${viewMode === "kanban" ? "active" : ""}`}
+              onClick={() => setViewMode("kanban")}
+            >
+              <IconKanban className="w-3.5 h-3.5" /> Kanban
+            </button>
+            <button
+              type="button"
+              className={`pill-tab ${viewMode === "table" ? "active" : ""}`}
+              onClick={() => setViewMode("table")}
+            >
+              <IconTable className="w-3.5 h-3.5" /> Table
+            </button>
+          </div>
 
-        {!loading && !error && items.length === 0 && (
-          <EmptyState
-            title="No cases found"
-            description="No canonical cases match your filter criteria."
-          />
-        )}
+          {has("case.create") && (
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => setShowCreateModal(true)}
+            >
+              <IconPlus className="w-4 h-4" /> New Case
+            </button>
+          )}
+        </div>
+      </div>
 
-        {/* Table View */}
-        {!loading && !error && items.length > 0 && viewMode === "table" && (
-          <div className="table-responsive">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Case Number</th>
-                  <th>Institution</th>
-                  <th>Category</th>
-                  <th>Lead Bureau</th>
-                  <th>Priority</th>
-                  <th>Status</th>
-                  <th>Opened At</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((c) => (
+      {has("case.view_index") && (
+        <div className="workspace-shortcuts">
+          <Link
+            to={params.get("index") === "all" ? "/cases" : "/cases?index=all"}
+          >
+            {params.get("index") === "all"
+              ? "Return to my accessible cases →"
+              : "Cross-bureau minimal case index →"}
+          </Link>
+          <span className="small muted">
+            {params.get("index") === "all"
+              ? "Index visibility does not grant complaint-content access."
+              : "This board is filtered by your assignments and valid access."}
+          </span>
+        </div>
+      )}
+      {/* Filter Row matching Fernly 01 */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "1.25rem",
+          flexWrap: "wrap",
+          gap: "1rem",
+        }}
+      >
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className={`button ${filterPill === "all" ? "button-primary" : "button-secondary"}`}
+            onClick={() => setFilterPill("all")}
+            style={{ borderRadius: "9999px", padding: "0.35rem 0.95rem" }}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className={`button ${filterPill === "my_bureau" ? "button-primary" : "button-secondary"}`}
+            onClick={() => setFilterPill("my_bureau")}
+            style={{ borderRadius: "9999px", padding: "0.35rem 0.95rem" }}
+          >
+            My Bureau ({activePersona.bureauCode || "All"})
+          </button>
+          <button
+            type="button"
+            className={`button ${filterPill === "high_priority" ? "button-primary" : "button-secondary"}`}
+            onClick={() => setFilterPill("high_priority")}
+            style={{ borderRadius: "9999px", padding: "0.35rem 0.95rem" }}
+          >
+            High &amp; Critical
+          </button>
+          <button
+            type="button"
+            className={`button ${filterPill === "due_soon" ? "button-primary" : "button-secondary"}`}
+            onClick={() => setFilterPill("due_soon")}
+            style={{ borderRadius: "9999px", padding: "0.35rem 0.95rem" }}
+          >
+            Due Soon / Overdue
+          </button>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <div
+            className="topbar-search"
+            style={{ width: "240px", padding: "0.3rem 0.75rem" }}
+          >
+            <IconSearch className="w-3.5 h-3.5 opacity-60" />
+            <input
+              type="text"
+              placeholder="Filter by keyword..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ fontSize: "0.82rem" }}
+            />
+          </div>
+          <span className="small muted font-semibold">
+            {filteredCases.length} case{filteredCases.length === 1 ? "" : "s"}{" "}
+            shown
+          </span>
+        </div>
+      </div>
+
+      {/* KANBAN VIEW (Fernly Reference 01) */}
+      {viewMode === "kanban" ? (
+        <div className="kanban-view-container">
+          {KANBAN_STAGES.map((stage) => {
+            const stageCases = filteredCases.filter(
+              (c) => c.status === stage.id,
+            );
+            return (
+              <div key={stage.id} className="kanban-column">
+                <div className="kanban-column-header">
+                  <div className="kanban-column-title-row">
+                    <span
+                      className="kanban-status-dot"
+                      style={{ backgroundColor: stage.color }}
+                    />
+                    <span className="kanban-column-title">{stage.title}</span>
+                  </div>
+                  <span className="kanban-column-count">
+                    {stageCases.length}
+                  </span>
+                </div>
+
+                {stageCases.map((c) => {
+                  const deadlineInfo = getRemainingTimeDisplay(
+                    c.target_resolution_date,
+                    c.status,
+                  );
+                  return (
+                    <Link
+                      key={c.case_id}
+                      to={`/cases/${c.case_id}`}
+                      className="kanban-card"
+                    >
+                      <div className="kanban-card-meta">
+                        <span className={`badge badge-priority-${c.priority}`}>
+                          {c.priority.toUpperCase()}
+                        </span>
+                        <span
+                          className="small muted font-semibold"
+                          style={{ fontSize: "0.72rem" }}
+                        >
+                          {c.case_number}
+                        </span>
+                      </div>
+
+                      <div className="kanban-card-title">
+                        {canReadCase(c, activePersona, state)
+                          ? c.title
+                          : "Restricted case · request access to view"}
+                      </div>
+                      <div className="kanban-card-inst">
+                        {c.institution_name}
+                      </div>
+
+                      <div className="kanban-card-footer">
+                        <div
+                          className="kanban-card-time"
+                          style={{
+                            color: deadlineInfo.isOverdue
+                              ? "var(--color-danger)"
+                              : deadlineInfo.isWarning
+                                ? "var(--color-warning)"
+                                : "var(--color-text-muted)",
+                            fontWeight: deadlineInfo.isWarning ? 700 : 500,
+                          }}
+                        >
+                          <IconClock className="w-3.5 h-3.5" />
+                          <span>{deadlineInfo.text}</span>
+                        </div>
+
+                        {/* Officer Avatars Stack */}
+                        <div className="kanban-card-avatars">
+                          {c.officer_assignments.length > 0 ? (
+                            c.officer_assignments.map((oa) => (
+                              <span
+                                key={oa.officer_assignment_id}
+                                className="avatar-stack-item"
+                                style={{ backgroundColor: "#155a37" }}
+                                title={`${oa.officer_name} (${oa.role})`}
+                              >
+                                {oa.officer_name
+                                  .split(" ")
+                                  .map((n) => n[0])
+                                  .slice(0, 2)
+                                  .join("")}
+                              </span>
+                            ))
+                          ) : (
+                            <span
+                              className="avatar-stack-item"
+                              style={{ backgroundColor: "#9ca3af" }}
+                              title="Unassigned"
+                            >
+                              ?
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
+
+                {stageCases.length === 0 && (
+                  <div
+                    style={{
+                      padding: "2rem 1rem",
+                      textAlign: "center",
+                      color: "var(--color-text-muted)",
+                      fontSize: "0.82rem",
+                      border: "1px dashed var(--color-border)",
+                      borderRadius: "var(--radius-lg)",
+                    }}
+                  >
+                    No cases in this stage
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        /* TABLE VIEW */
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Case Number</th>
+                <th>Title</th>
+                <th>Institution</th>
+                <th>Category</th>
+                <th>Lead Bureau</th>
+                <th>Priority</th>
+                <th>Status</th>
+                <th>Deadline</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredCases.map((c) => {
+                const deadline = getRemainingTimeDisplay(
+                  c.target_resolution_date,
+                  c.status,
+                );
+                return (
                   <tr key={c.case_id}>
                     <td>
-                      <strong>{c.case_number}</strong>
+                      <Link
+                        to={`/cases/${c.case_id}`}
+                        style={{ fontWeight: 600 }}
+                      >
+                        {c.case_number}
+                      </Link>
+                    </td>
+                    <td style={{ maxWidth: "260px" }}>
+                      <div
+                        style={{
+                          fontWeight: 500,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {canReadCase(c, activePersona, state)
+                          ? c.title
+                          : "Restricted case · request access to view"}
+                      </div>
                     </td>
                     <td>{c.institution_name}</td>
-                    <td>{c.category_name || "Unassigned"}</td>
-                    <td>{c.lead_bureau_code || "Unassigned"}</td>
                     <td>
-                      <StatusBadge
-                        value={c.priority}
-                        label={severityLabel(c.priority)}
-                      />
+                      <span className="small muted">{c.category_name}</span>
                     </td>
                     <td>
-                      <StatusBadge
-                        value={c.status}
-                        label={caseStatusLabel(c.status)}
-                      />
+                      <span className="small font-semibold">
+                        {c.lead_bureau_code}
+                      </span>
                     </td>
-                    <td>{formatDateTime(c.opened_at)}</td>
                     <td>
-                      <Link to={`/cases/${c.case_id}`} className="button button-small">
-                        {c.can_view_details ? "View Details" : "Request Access"}
+                      <span className={`badge badge-priority-${c.priority}`}>
+                        {c.priority}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`badge badge-status-${c.status}`}>
+                        {c.status.replace(/_/g, " ")}
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        style={{
+                          fontSize: "0.8rem",
+                          fontWeight: deadline.isWarning ? 700 : 500,
+                          color: deadline.isOverdue
+                            ? "var(--color-danger)"
+                            : deadline.isWarning
+                              ? "var(--color-warning)"
+                              : "inherit",
+                        }}
+                      >
+                        {deadline.text}
+                      </span>
+                    </td>
+                    <td>
+                      <Link
+                        to={`/cases/${c.case_id}`}
+                        className="button button-quiet"
+                        style={{
+                          padding: "0.25rem 0.6rem",
+                          fontSize: "0.78rem",
+                        }}
+                      >
+                        View &rarr;
                       </Link>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-        {/* Kanban Board View */}
-        {!loading && !error && items.length > 0 && viewMode === "kanban" && (
-          <div style={{ display: "flex", gap: "1rem", overflowX: "auto", paddingBottom: "1rem", marginTop: "1rem" }}>
-            {KANBAN_COLUMNS.map((col) => {
-              const colCases = items.filter((c) => c.status === col.id);
-              return (
-                <div
-                  key={col.id}
-                  style={{
-                    minWidth: "260px",
-                    maxWidth: "300px",
-                    background: "var(--color-surface-subtle, rgba(0,0,0,0.02))",
-                    borderRadius: "6px",
-                    padding: "0.75rem",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "0.75rem",
-                    border: "1px solid var(--color-border)",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <h3 style={{ margin: 0, fontSize: "0.95rem" }}>{col.title}</h3>
-                    <span className="badge" style={{ fontSize: "0.8rem", padding: "0.1rem 0.5rem" }}>
-                      {colCases.length}
-                    </span>
-                  </div>
-
-                  {colCases.length === 0 ? (
-                    <div className="hint" style={{ fontSize: "0.85rem", textAlign: "center", padding: "1rem 0" }}>
-                      No cases in this stage
-                    </div>
-                  ) : (
-                    colCases.map((c) => (
-                      <div
-                        key={c.case_id}
-                        style={{
-                          background: "var(--color-surface)",
-                          borderRadius: "4px",
-                          padding: "0.75rem",
-                          border: "1px solid var(--color-border)",
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: "0.5rem",
-                          boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-                        }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                          <strong>{c.case_number}</strong>
-                          <StatusBadge value={c.priority} label={severityLabel(c.priority)} />
-                        </div>
-                        <div style={{ fontSize: "0.85rem", fontWeight: 500 }}>
-                          {c.institution_name}
-                        </div>
-                        <div className="hint" style={{ fontSize: "0.8rem" }}>
-                          Bureau: {c.lead_bureau_code || "Unassigned"}
-                        </div>
-                        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.25rem" }}>
-                          <Link to={`/cases/${c.case_id}`} className="button button-small" style={{ fontSize: "0.8rem" }}>
-                            {c.can_view_details ? "View" : "Request"}
-                          </Link>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Modal for Creating Canonical Case */}
+      {/* Create Case Modal */}
       {showCreateModal && (
         <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: "rgba(0, 0, 0, 0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
+          className="modal-backdrop"
+          onClick={() => setShowCreateModal(false)}
         >
-          <div className="card" style={{ maxWidth: "500px", width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
-            <h3>Create Canonical Case</h3>
-            <p className="hint">
-              Initialize a canonical case from an authorized screened submission.
-            </p>
-
-            {createError && (
-              <div className="callout callout-danger" style={{ marginBottom: "1rem" }}>
-                {createError}
-              </div>
-            )}
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Create Canonical Case</h3>
+              <button
+                type="button"
+                className="btn-icon-close"
+                onClick={() => setShowCreateModal(false)}
+              >
+                &times;
+              </button>
+            </div>
 
             <form onSubmit={handleCreateCase}>
+              {createError && (
+                <p role="alert" className="error-panel">
+                  {createError}
+                </p>
+              )}
               <label>
-                Source Submission ID
-                <input
-                  type="text"
+                Source Submission
+                <select
                   required
-                  placeholder="UUID of screened submission"
-                  value={sourceSubmissionId}
-                  onChange={(e) => setSourceSubmissionId(e.target.value)}
-                />
+                  value={sourceSubId}
+                  onChange={(e) => setSourceSubId(e.target.value)}
+                >
+                  <option value="">Select verified submission...</option>
+                  {accessibleSubmissions(state, activePersona)
+                    .filter(
+                      (sub) =>
+                        sub.institution_verified &&
+                        !sub.canonical_case_id &&
+                        !state.duplicateCandidates.some(
+                          (d) =>
+                            d.submission_id === sub.id &&
+                            d.review_status === "pending",
+                        ),
+                    )
+                    .map((sub) => (
+                      <option key={sub.id} value={sub.id}>
+                        {sub.submission_number}:{" "}
+                        {sub.institution_name_submitted} (
+                        {sub.subject.slice(0, 40)}...)
+                      </option>
+                    ))}
+                </select>
               </label>
 
               <label>
-                Lead Bureau ID
-                <input
-                  type="text"
-                  required
-                  placeholder="UUID of lead bureau"
-                  value={primaryBureauId}
-                  onChange={(e) => setPrimaryBureauId(e.target.value)}
-                />
+                Lead Bureau Assignment
+                <select
+                  value={leadBureauId}
+                  onChange={(e) => setLeadBureauId(e.target.value)}
+                >
+                  <option value="">Select Bureau...</option>
+                  {state.bureaus
+                    .filter(
+                      (b) =>
+                        activePersona.scopeType === "global" ||
+                        b.id === activePersona.bureauId,
+                    )
+                    .map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.code}: {b.name}
+                      </option>
+                    ))}
+                </select>
               </label>
 
               <label>
@@ -348,20 +640,20 @@ export function CasesPage() {
                 <input
                   type="text"
                   required
-                  placeholder="Concise summary title"
+                  placeholder="Enter canonical summary title..."
                   value={caseTitle}
                   onChange={(e) => setCaseTitle(e.target.value)}
                 />
               </label>
 
               <label>
-                Case Description
+                Detailed Description &amp; Regulatory Context
                 <textarea
                   rows={4}
                   required
-                  placeholder="Comprehensive case notes and facts"
-                  value={caseDescription}
-                  onChange={(e) => setCaseDescription(e.target.value)}
+                  placeholder="Summarize the core grievance issue, violation of APH clauses, and relief sought..."
+                  value={caseDesc}
+                  onChange={(e) => setCaseDesc(e.target.value)}
                 />
               </label>
 
@@ -378,7 +670,7 @@ export function CasesPage() {
                 </select>
               </label>
 
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
+              <div className="modal-footer">
                 <button
                   type="button"
                   className="button button-quiet"
@@ -398,6 +690,6 @@ export function CasesPage() {
           </div>
         </div>
       )}
-    </section>
+    </div>
   );
 }

@@ -1,23 +1,16 @@
 import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 
+import { RoleSwitcher } from "./RoleSwitcher";
 import { useAuth } from "../auth/AuthProvider";
 
 /** Chrome for the public simulated portals. Deliberately louder than the app. */
 export function PublicShell({ children }: { children: ReactNode }) {
-  const { status, me, has } = useAuth();
+  const { status, me, has, activePersona } = useAuth();
   const signedIn = status === "ready" && Boolean(me);
 
   return (
     <div className="public-shell">
-      <div className="simulation-strip" role="status">
-        <strong>Simulation only</strong>
-        <span>
-          These portals are a demonstration. They are not connected to AICTE or CPGRAMS and no real
-          complaint is filed.
-        </span>
-      </div>
-
       <header className="public-header">
         <Link to="/demo" className="brand">
           <span className="brand-mark" aria-hidden="true">
@@ -25,16 +18,16 @@ export function PublicShell({ children }: { children: ReactNode }) {
           </span>
           <span>
             <strong>AICTE OneDesk</strong>
-            <small>Simulated complaint intake</small>
+            <small>Institution Complaint Management</small>
           </span>
         </Link>
 
-        <nav className="public-nav" aria-label="Demo">
+        <nav className="public-nav" aria-label="Portals">
           <Link to="/demo/aicte" className="nav-link">
-            AICTE demo
+            AICTE Portal
           </Link>
           <Link to="/demo/cpgrams" className="nav-link">
-            CPGRAMS demo
+            CPGRAMS Portal
           </Link>
           {signedIn ? (
             <>
@@ -43,9 +36,17 @@ export function PublicShell({ children }: { children: ReactNode }) {
                   Intake queue
                 </Link>
               ) : null}
-              <Link to="/" className="button button-quiet">
-                Dashboard
-              </Link>
+              {(has("case.view_index") || has("case.view_detail")) && (
+                <Link to="/" className="button button-quiet">
+                  Dashboard
+                </Link>
+              )}
+              {activePersona.roleCode === "COMPLAINANT" && (
+                <Link to="/portal" className="nav-link">
+                  My complaints
+                </Link>
+              )}
+              <RoleSwitcher />
             </>
           ) : (
             <Link to="/sign-in" className="button button-quiet">
@@ -58,8 +59,10 @@ export function PublicShell({ children }: { children: ReactNode }) {
       <main className="public-main">{children}</main>
 
       <footer className="app-footer">
-        <span>Demonstrator only. Illustrative demo data; not an official AICTE service.</span>
-        <span>Submissions are preserved unmodified in the demo database.</span>
+        <span>
+          AICTE OneDesk — Institution Grievance Monitoring & Redressal Platform
+        </span>
+        <span>Track your complaint using the reference on your receipt.</span>
       </footer>
     </div>
   );

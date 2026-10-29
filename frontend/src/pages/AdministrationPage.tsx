@@ -1,9 +1,16 @@
+import { useSimulation, isResolved } from "../simulation/selectors";
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { Link } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthProvider";
-import { EmptyState, ErrorPanel, Loading, PageHeader, StatusBadge } from "../components/ui";
+import {
+  EmptyState,
+  ErrorPanel,
+  Loading,
+  PageHeader,
+  StatusBadge,
+} from "../components/ui";
 import { usePagedResource, useResource } from "../lib/useResource";
 import type { Role, UserSummary } from "../types";
 import { PermissionDeniedPage } from "./PermissionDeniedPage";
@@ -12,6 +19,8 @@ type Tab = "users" | "roles";
 
 export function AdministrationPage() {
   const { has } = useAuth();
+  const state = useSimulation();
+  const [officerQuery, setOfficerQuery] = useState("");
   const canViewUsers = has("user.view");
   const canViewRoles = has("role.view");
   const [tab, setTab] = useState<Tab>(canViewUsers ? "users" : "roles");
@@ -23,10 +32,79 @@ export function AdministrationPage() {
   return (
     <section>
       <PageHeader
-        title="Administration"
+        title="Officers & administration"
         description="Authorized users, role grants and the role catalogue. Administration requires an organisation-wide capability, never a bureau-scoped one."
       />
 
+      {canViewUsers && (
+        <section>
+          <label>
+            Search officers
+            <input
+              value={officerQuery}
+              onChange={(e) => setOfficerQuery(e.target.value)}
+              placeholder="Name, bureau, or designation…"
+            />
+          </label>
+          <div className="officer-grid">
+            {state.bureauMembers
+              .filter(
+                (m) =>
+                  m.is_active &&
+                  `${m.full_name} ${m.designation} ${state.bureaus.find((b) => b.id === m.bureau_id)?.name}`
+                    .toLowerCase()
+                    .includes(officerQuery.toLowerCase()),
+              )
+              .map((m, i) => {
+                const assigned = state.cases.filter((c) =>
+                  c.officer_assignments.some(
+                    (a) => a.officer_id === m.user_id && a.status === "active",
+                  ),
+                );
+                return (
+                  <article className="card officer-card" key={m.id}>
+                    <span className={`officer-avatar avatar-tone-${i % 4}`}>
+                      {m.full_name
+                        .split(" ")
+                        .map((n) => n[0])
+                        .slice(0, 2)
+                        .join("")}
+                    </span>
+                    <h3>{m.full_name}</h3>
+                    <p>{m.designation}</p>
+                    <span className="badge badge-active">
+                      {state.bureaus.find((b) => b.id === m.bureau_id)?.code}
+                    </span>
+                    <div className="toolbar">
+                      <span>
+                        <strong>
+                          {assigned.filter((c) => !isResolved(c)).length}
+                        </strong>{" "}
+                        active
+                      </span>
+                      <span>
+                        <strong>{assigned.filter(isResolved).length}</strong>{" "}
+                        completed
+                      </span>
+                    </div>
+                    <Link
+                      className="button button-secondary"
+                      to={`/cases?officer=${m.user_id}`}
+                    >
+                      Assigned cases
+                    </Link>{" "}
+                    <Link
+                      className="button button-primary"
+                      to={`/administration/users/${m.user_id}`}
+                    >
+                      Profile
+                    </Link>
+                  </article>
+                );
+              })}
+          </div>
+        </section>
+      )}
       <div className="tabs" role="tablist" aria-label="Administration sections">
         {canViewUsers ? (
           <button
@@ -52,7 +130,9 @@ export function AdministrationPage() {
         ) : null}
       </div>
 
-      {tab === "users" && canViewUsers ? <UsersPanel canViewRoles={canViewRoles} /> : null}
+      {tab === "users" && canViewUsers ? (
+        <UsersPanel canViewRoles={canViewRoles} />
+      ) : null}
       {tab === "roles" && canViewRoles ? <RolesPanel /> : null}
     </section>
   );
@@ -88,7 +168,10 @@ function UsersPanel({ canViewRoles }: { canViewRoles: boolean }) {
           </label>
           <label>
             Account status
-            <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value)}
+            >
               <option value="">Any status</option>
               <option value="active">Active</option>
               <option value="inactive">Inactive</option>
@@ -102,9 +185,8 @@ function UsersPanel({ canViewRoles }: { canViewRoles: boolean }) {
       </div>
 
       <p className="muted small">
-        Accounts are created in Supabase Auth and linked to an AICTE OneDesk profile. This Phase 1
-        build does not expose a create-account endpoint; an administrator provisions identities out
-        of band and then manages role grants here.
+        Accounts are linked to an AICTE OneDesk profile. An administrator
+        provisions officer identities and manages bureau role grants here.
         {!canViewRoles
           ? " Your role can review users but not the role catalogue."
           : null}
@@ -132,7 +214,9 @@ function UsersPanel({ canViewRoles }: { canViewRoles: boolean }) {
               {users.items.map((user) => (
                 <tr key={user.id}>
                   <td>
-                    <Link to={`/administration/users/${user.id}`}>{user.full_name}</Link>
+                    <Link to={`/administration/users/${user.id}`}>
+                      {user.full_name}
+                    </Link>
                     {user.designation ? (
                       <div className="muted small">{user.designation}</div>
                     ) : null}
@@ -145,10 +229,16 @@ function UsersPanel({ canViewRoles }: { canViewRoles: boolean }) {
                     ) : (
                       <ul className="tag-list">
                         {user.roles.map((role) => (
-                          <li key={`${role.role_code}-${role.bureau_id ?? "global"}`} className="tag">
+                          <li
+                            key={`${role.role_code}-${role.bureau_id ?? "global"}`}
+                            className="tag"
+                          >
                             {role.role_code}
                             {role.bureau_id ? (
-                              <span className="muted small"> ({role.bureau_name})</span>
+                              <span className="muted small">
+                                {" "}
+                                ({role.bureau_name})
+                              </span>
                             ) : null}
                           </li>
                         ))}
@@ -192,7 +282,11 @@ function RolesPanel() {
     <div className="card">
       <div className="toolbar">
         <h2>Role catalogue</h2>
-        <button type="button" className="button button-quiet" onClick={() => void roles.reload()}>
+        <button
+          type="button"
+          className="button button-quiet"
+          onClick={() => void roles.reload()}
+        >
           Refresh
         </button>
       </div>
@@ -219,9 +313,13 @@ function RolesPanel() {
                   ) : null}
                 </div>
               </div>
-              {role.description ? <p className="muted">{role.description}</p> : null}
+              {role.description ? (
+                <p className="muted">{role.description}</p>
+              ) : null}
               <div>
-                <span className="small muted">Capabilities ({role.permissions.length})</span>
+                <span className="small muted">
+                  Capabilities ({role.permissions.length})
+                </span>
                 <ul className="tag-list">
                   {role.permissions.map((permission) => (
                     <li key={permission} className="tag mono small">

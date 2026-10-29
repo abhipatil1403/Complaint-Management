@@ -1,53 +1,109 @@
+import { PublicCorrespondence } from "../components/PublicCorrespondence";
+import { PdfPreview } from "../components/PdfPreview";
+import {
+  canActOnCase,
+  canReadCase,
+  useSimulation,
+} from "../simulation/selectors";
+import { RestrictedCase } from "../components/RestrictedCase";
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
-
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
-import { EmptyState, Loading, PageHeader, StatusBadge } from "../components/ui";
-import { formatDateTime } from "../lib/intake";
-import { useResource } from "../lib/useResource";
+import {
+  IconAlertTriangle,
+  IconClock,
+  IconClose,
+  IconDownload,
+  IconPaperclip,
+  IconPlus,
+  IconShield,
+} from "../components/Icons";
+import { EmptyState, Loading } from "../components/ui";
 import {
   caseStatusLabel,
   formatFileSize,
   severityLabel,
   VALID_STATUS_TRANSITIONS,
 } from "../lib/cases";
-import type {
-  CaseAttachmentItem,
-  CaseDetail,
-  CaseNoteItem,
-  CaseAccessGrantItem,
-  Bureau,
-  BureauMember,
-} from "../types";
+import { formatDateTime } from "../lib/intake";
+import { useResource } from "../lib/useResource";
+import { simulationStore } from "../simulation/simulationStore";
+import type { CaseDetail, CaseNoteItem } from "../types";
 import { PermissionDeniedPage } from "./PermissionDeniedPage";
 
-type ActiveTab = "overview" | "assignments" | "timeline" | "notes" | "attachments" | "transfers" | "access";
+type ActiveTab =
+  | "overview"
+  | "assignments"
+  | "timeline"
+  | "notes"
+  | "attachments"
+  | "transfers"
+  | "access"
+  | "correspondence";
 
 export function CaseDetailPage() {
   const { caseId } = useParams<{ caseId: string }>();
-  const { has, api } = useAuth();
-  const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
+  const { has: hasPermission, api, simulatedClock, activePersona } = useAuth();
+  const simState = useSimulation();
+  const rawCase = simState.cases.find((c) => c.case_id === caseId);
+  const has = (p: string) =>
+    hasPermission(p) &&
+    (!rawCase ||
+      ![
+        "case.status.change",
+        "case.note.create",
+        "case.note.delete",
+        "case.assign.bureau",
+        "case.assign.officer",
+        "attachment.upload",
+        "attachment.quarantine",
+        "case.transfer.manage",
+        "case.access.manage",
+      ].includes(p) ||
+      canActOnCase(rawCase, activePersona, simState));
+  const [tabParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() =>
+    [
+      "overview",
+      "assignments",
+      "timeline",
+      "notes",
+      "attachments",
+      "transfers",
+      "access",
+      "correspondence",
+    ].includes(tabParams.get("tab") || "")
+      ? (tabParams.get("tab") as ActiveTab)
+      : "overview",
+  );
 
   // Primary resource
-  const { data: caseItem, loading, error, reload } = useResource<CaseDetail>(
-    (has("case.view_index") || has("case.view_detail")) && caseId ? `/cases/${caseId}` : null,
+  const {
+    data: caseItem,
+    loading,
+    error,
+    reload,
+  } = useResource<CaseDetail>(
+    (has("case.view_index") || has("case.view_detail")) && caseId
+      ? `/cases/${caseId}`
+      : null,
   );
 
-  // Sub-resources (loaded when tabs are active)
+  // Sub-resources
   const { data: notes, reload: reloadNotes } = useResource<CaseNoteItem[]>(
-    has("case.note.view") && caseId && activeTab === "notes" ? `/cases/${caseId}/notes` : null,
+    has("case.note.view") && caseId && activeTab === "notes"
+      ? `/cases/${caseId}/notes`
+      : null,
   );
 
-  const { data: attachments, reload: reloadAttachments } = useResource<CaseAttachmentItem[]>(
-    has("attachment.view") && caseId && activeTab === "attachments" ? `/cases/${caseId}/attachments` : null,
+  const { data: attachments, reload: reloadAttachments } = useResource<any[]>(
+    has("attachment.view") && caseId && activeTab === "attachments"
+      ? `/cases/${caseId}/attachments`
+      : null,
   );
 
-  const { data: accessGrants, reload: reloadGrants } = useResource<CaseAccessGrantItem[]>(
-    has("case.access.manage") && caseId && activeTab === "access" ? `/cases/${caseId}/access-grants` : null,
-  );
-
-  const { data: bureaus } = useResource<Bureau[]>(
-    has("bureau.view") ? "/bureaus" : null,
+  const { data: accessGrants, reload: reloadGrants } = useResource<any[]>(
+    caseId && activeTab === "access" ? `/cases/${caseId}/access-grants` : null,
   );
 
   // Modal States
@@ -59,160 +115,116 @@ export function CaseDetailPage() {
 
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [noteText, setNoteText] = useState("");
-  const [noteVisibility, setNoteVisibility] = useState<"shared" | "bureau_private">("shared");
-  const [noteType, setNoteType] = useState<"general" | "internal_review" | "resolution" | "handover">("general");
+  const [noteVisibility, setNoteVisibility] = useState<
+    "shared" | "bureau_private"
+  >("shared");
+  const [noteType, setNoteType] = useState<
+    "general" | "internal_review" | "resolution" | "handover"
+  >("general");
   const [noteSubmitting, setNoteSubmitting] = useState(false);
   const [noteError, setNoteError] = useState<string | null>(null);
 
   const [showAssignBureauModal, setShowAssignBureauModal] = useState(false);
   const [selectedBureauId, setSelectedBureauId] = useState("");
-  const [assignType, setAssignType] = useState<"lead" | "collaborating">("collaborating");
+  const assignType: "lead" | "collaborating" = "collaborating";
   const [assignReason, setAssignReason] = useState("");
   const [assignSubmitting, setAssignSubmitting] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
 
   const [showAssignOfficerModal, setShowAssignOfficerModal] = useState(false);
   const [targetBureauAssignId, setTargetBureauAssignId] = useState("");
-  const [targetBureauId, setTargetBureauId] = useState("");
+  const [, setTargetBureauId] = useState("");
   const [officerUserId, setOfficerUserId] = useState("");
-  const [officerRole, setOfficerRole] = useState<"lead_officer" | "supporting" | "reviewer">("supporting");
+  const [officerRole, setOfficerRole] = useState<
+    "lead_officer" | "supporting" | "reviewer"
+  >("supporting");
   const [officerNotes, setOfficerNotes] = useState("");
   const [officerSubmitting, setOfficerSubmitting] = useState(false);
   const [officerError, setOfficerError] = useState<string | null>(null);
 
-  const { data: bureauMembers } = useResource<BureauMember[]>(
-    targetBureauId ? `/bureaus/${targetBureauId}/members` : null,
-  );
-
   const [showTransferModal, setShowTransferModal] = useState(false);
-  const [transferFromAssignId, setTransferFromAssignId] = useState("");
   const [transferToBureauId, setTransferToBureauId] = useState("");
-  const [transferType, setTransferType] = useState<"handover" | "lead_change" | "reassignment">("handover");
+  const [transferType, setTransferType] = useState<
+    "handover" | "lead_change" | "reassignment"
+  >("handover");
   const [transferReason, setTransferReason] = useState("");
   const [transferSubmitting, setTransferSubmitting] = useState(false);
   const [transferError, setTransferError] = useState<string | null>(null);
 
   const [showAccessModal, setShowAccessModal] = useState(false);
-  const [accessLevel, setAccessLevel] = useState<"details" | "collaborate">("details");
+  const [accessLevel, setAccessLevel] = useState<"details" | "collaborate">(
+    "details",
+  );
   const [accessReason, setAccessReason] = useState("");
   const [accessSubmitting, setAccessSubmitting] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
 
+  // Attachment Modal & Real File Upload
   const [showAttachmentModal, setShowAttachmentModal] = useState(false);
-  const [attachFilename, setAttachFilename] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFileDataUrl, setSelectedFileDataUrl] = useState<string>("");
   const [attachType, setAttachType] = useState("supporting_document");
   const [attachDescription, setAttachDescription] = useState("");
   const [attachSubmitting, setAttachSubmitting] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
 
+  // Attachment Preview Modal
+  const [previewAttachment, setPreviewAttachment] = useState<any | null>(null);
+
   if (!has("case.view_index") && !has("case.view_detail")) {
     return <PermissionDeniedPage />;
   }
 
-  if (loading) {
-    return <Loading label="Loading canonical case details..." />;
+  if (rawCase && !canReadCase(rawCase, activePersona, simState))
+    return (
+      <RestrictedCase
+        caseId={rawCase.case_id}
+        caseNumber={rawCase.case_number}
+      />
+    );
+
+  if (loading && !caseItem) {
+    return <Loading label="Loading canonical case record..." />;
   }
 
   if (error || !caseItem) {
     return (
-      <section>
-        <PageHeader
-          title="Case Access Control"
-          actions={
-            <Link to="/cases" className="button button-quiet">
-              Back to Cases
-            </Link>
-          }
-        />
-        <div className="card">
-          <div className="callout callout-warning">
-            <h3>Restricted Case Content</h3>
-            <p>
-              Under AICTE Least-Privilege & Cross-Bureau Privacy Policy, complete complaint details, internal notes, and attachments are restricted to members of the assigned bureaus or holders of active access grants.
-            </p>
-            <p style={{ marginTop: "1rem" }}>
-              If you require access to this case for cross-bureau coordination, you can submit an access request below.
-            </p>
-            {has("case.access.request") && (
-              <button
-                type="button"
-                className="button button-primary"
-                style={{ marginTop: "1rem" }}
-                onClick={() => setShowAccessModal(true)}
-              >
-                Request Cross-Bureau Access
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Access Request Modal */}
-        {showAccessModal && (
-          <div style={modalBackdropStyle}>
-            <div className="card" style={modalCardStyle}>
-              <h3>Request Case Access</h3>
-              <p className="hint">
-                Submit an auditable request to view or collaborate on Case #{caseId?.slice(0, 8)}.
-              </p>
-              {accessError && <div className="callout callout-danger" style={{ marginBottom: "1rem" }}>{accessError}</div>}
-              <form onSubmit={async (e) => {
-                e.preventDefault();
-                setAccessSubmitting(true);
-                setAccessError(null);
-                try {
-                  await api.post(`/cases/${caseId}/access-requests`, {
-                    access_level: accessLevel,
-                    reason: accessReason.trim(),
-                  });
-                  setShowAccessModal(false);
-                  setAccessReason("");
-                  alert("Access request submitted successfully.");
-                } catch (err: any) {
-                  setAccessError(err?.message || "Failed to submit access request.");
-                } finally {
-                  setAccessSubmitting(false);
-                }
-              }}>
-                <label>
-                  Requested Scope
-                  <select value={accessLevel} onChange={(e) => setAccessLevel(e.target.value as any)}>
-                    <option value="details">Full Case Details (Read-only)</option>
-                    <option value="collaborate">Collaborate (Add notes & evidence)</option>
-                  </select>
-                </label>
-                <label>
-                  Official Justification
-                  <textarea
-                    rows={4}
-                    required
-                    placeholder="Explain why your bureau requires access to this case..."
-                    value={accessReason}
-                    onChange={(e) => setAccessReason(e.target.value)}
-                  />
-                </label>
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
-                  <button type="button" className="button button-quiet" onClick={() => setShowAccessModal(false)}>
-                    Cancel
-                  </button>
-                  <button type="submit" className="button button-primary" disabled={accessSubmitting}>
-                    {accessSubmitting ? "Submitting..." : "Submit Request"}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-      </section>
+      <EmptyState
+        title="Case Not Found"
+        description="The requested canonical case could not be located."
+      />
     );
   }
 
-  // Permitted next status transitions
-  const permittedStatuses = VALID_STATUS_TRANSITIONS[caseItem.status] ?? [];
   const collaboratingBureaus = caseItem.collaborating_bureaus || [];
-  const actionHistory = caseItem.action_history || [];
-  const relatedCases = caseItem.related_cases || [];
   const officerAssignments = caseItem.officer_assignments || [];
+  const actionHistory = caseItem.action_history || [];
+  const permittedStatuses =
+    VALID_STATUS_TRANSITIONS[caseItem.status as any] || [];
 
+  // Active escalation check
+  const state = simulationStore.getState();
+  const activeEscalation = state.escalations.find(
+    (e) => e.case_id === caseItem.case_id && e.status !== "resolved",
+  );
+
+  // SLA calculations
+  const now = new Date(simulatedClock).getTime();
+  const targetDate = new Date(
+    (caseItem as any).target_resolution_date || caseItem.opened_at,
+  ).getTime();
+  const diffDays = Math.ceil((targetDate - now) / (1000 * 60 * 60 * 24));
+  const isOverdue =
+    targetDate < now &&
+    caseItem.status !== "resolved" &&
+    caseItem.status !== "closed";
+  const isAtRisk =
+    diffDays >= 0 &&
+    diffDays <= 3 &&
+    caseItem.status !== "resolved" &&
+    caseItem.status !== "closed";
+
+  // Handlers
   const handleStatusTransition = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStatus) return;
@@ -221,15 +233,13 @@ export function CaseDetailPage() {
     try {
       await api.post(`/cases/${caseItem.case_id}/status-transitions`, {
         to_status: newStatus,
-        reason: statusReason.trim(),
-        expected_updated_at: caseItem.updated_at,
+        reason: statusReason.trim() || "Status updated by authorized officer",
       });
       setShowStatusModal(false);
-      setNewStatus("");
       setStatusReason("");
       await reload();
     } catch (err: any) {
-      setStatusError(err?.message || "Failed to transition status.");
+      setStatusError(err?.message || "Failed to update case status.");
     } finally {
       setStatusSubmitting(false);
     }
@@ -245,16 +255,26 @@ export function CaseDetailPage() {
         note_text: noteText.trim(),
         visibility: noteVisibility,
         note_type: noteType,
-        bureau_id: noteVisibility === "bureau_private" ? caseItem.lead_bureau_id : null,
       });
       setShowNoteModal(false);
       setNoteText("");
       await reloadNotes();
       await reload();
     } catch (err: any) {
-      setNoteError(err?.message || "Failed to create note.");
+      setNoteError(err?.message || "Failed to add note.");
     } finally {
       setNoteSubmitting(false);
+    }
+  };
+
+  const handleDeleteNote = async (noteId: string) => {
+    if (!window.confirm("Remove this case note?")) return;
+    try {
+      await api.delete(`/cases/${caseItem.case_id}/notes/${noteId}`);
+      await reloadNotes();
+      await reload();
+    } catch (err: any) {
+      alert(err?.message || "Failed to delete note.");
     }
   };
 
@@ -282,15 +302,19 @@ export function CaseDetailPage() {
 
   const handleAssignOfficer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!targetBureauAssignId || !officerUserId) return;
+    if (!officerUserId || !targetBureauAssignId) return;
     setOfficerSubmitting(true);
     setOfficerError(null);
     try {
-      await api.post(`/bureau-assignments/${targetBureauAssignId}/officer-assignments`, {
-        officer_user_id: officerUserId,
-        role: officerRole,
-        notes: officerNotes.trim() || undefined,
-      });
+      await api.post(
+        `/bureau-assignments/${targetBureauAssignId}/officer-assignments`,
+        {
+          case_id: caseItem.case_id,
+          officer_user_id: officerUserId,
+          role: officerRole,
+          notes: officerNotes.trim() || undefined,
+        },
+      );
       setShowAssignOfficerModal(false);
       setOfficerUserId("");
       setOfficerNotes("");
@@ -304,17 +328,17 @@ export function CaseDetailPage() {
 
   const handleRequestTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!transferFromAssignId || !transferToBureauId || !transferReason.trim()) return;
+    if (!transferToBureauId || !transferReason.trim()) return;
     setTransferSubmitting(true);
     setTransferError(null);
     try {
       await api.post(`/cases/${caseItem.case_id}/transfers`, {
-        from_bureau_assignment_id: transferFromAssignId,
         to_bureau_id: transferToBureauId,
         transfer_type: transferType,
         reason: transferReason.trim(),
       });
       setShowTransferModal(false);
+      setTransferToBureauId("");
       setTransferReason("");
       await reload();
     } catch (err: any) {
@@ -324,23 +348,66 @@ export function CaseDetailPage() {
     }
   };
 
+  const handleRequestAccess = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!accessReason.trim()) return;
+    setAccessSubmitting(true);
+    setAccessError(null);
+    try {
+      await api.post(`/cases/${caseItem.case_id}/access-requests`, {
+        access_level: accessLevel,
+        justification: accessReason.trim(),
+      });
+      setShowAccessModal(false);
+      setAccessReason("");
+      await reloadGrants();
+      await reload();
+    } catch (err: any) {
+      setAccessError(err?.message || "Failed to request access.");
+    } finally {
+      setAccessSubmitting(false);
+    }
+  };
+
+  // Real File Upload
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 25 * 1024 * 1024) {
+      setAttachError("File size exceeds the 25 MB upload limit.");
+      return;
+    }
+
+    setSelectedFile(file);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setSelectedFileDataUrl(event.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleUploadAttachment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!attachFilename.trim()) return;
+    if (!selectedFile || !selectedFileDataUrl) {
+      setAttachError("Please select a file to upload.");
+      return;
+    }
+
     setAttachSubmitting(true);
     setAttachError(null);
     try {
       await api.post(`/cases/${caseItem.case_id}/attachments`, {
-        original_filename: attachFilename.trim(),
-        storage_bucket: "complaint-evidence",
-        storage_path: `cases/${caseItem.case_id}/${Date.now()}_${attachFilename.trim().replace(/\s+/g, "_")}`,
-        mime_type: "application/pdf",
-        file_size_bytes: 1024 * 142,
+        original_filename: selectedFile.name,
+        mime_type: selectedFile.type || "application/octet-stream",
+        file_size_bytes: selectedFile.size,
+        data_url: selectedFileDataUrl,
         attachment_type: attachType,
         description: attachDescription.trim() || undefined,
       });
       setShowAttachmentModal(false);
-      setAttachFilename("");
+      setSelectedFile(null);
+      setSelectedFileDataUrl("");
       setAttachDescription("");
       await reloadAttachments();
       await reload();
@@ -351,558 +418,1141 @@ export function CaseDetailPage() {
     }
   };
 
+  const handleDownloadAttachment = async (att: any) => {
+    if (att.is_quarantined) {
+      alert(
+        `Download blocked: File "${att.filename || att.original_filename}" is quarantined for security review.`,
+      );
+      return;
+    }
+
+    if (!att.data_url) {
+      alert(
+        "The original file is unavailable in this browser. Upload it again to restore access.",
+      );
+      return;
+    }
+    const payload = await fetch(att.data_url).then((response) =>
+      response.blob(),
+    );
+    const downloadUrl = URL.createObjectURL(payload);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download =
+      att.filename || att.original_filename || "evidence_document.pdf";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+  };
+
+  const handleQuarantine = (att: any) => {
+    const reason = prompt(
+      "Specify reason for quarantining this attachment (malware risk, illegible scan, privacy violation):",
+    );
+    if (reason && reason.trim()) {
+      simulationStore.quarantineAttachment(
+        caseItem.case_id,
+        att.attachment_id,
+        reason.trim(),
+      );
+      reloadAttachments();
+    }
+  };
+
   return (
-    <section>
-      <PageHeader
-        title={`Case ${caseItem.case_number}: ${caseItem.title}`}
-        description={`Canonical case for ${caseItem.institution_name}`}
-        actions={
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-            <Link to="/cases" className="button button-quiet">
-              Back to Cases
+    <div className="case-workspace">
+      {/* Header with Title and Transition CTA */}
+      <div className="page-header">
+        <div className="page-header-info">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.75rem",
+              marginBottom: "0.25rem",
+            }}
+          >
+            <Link to="/cases" className="small muted">
+              &larr; Back to Cases
             </Link>
-            {has("case.status.change") && permittedStatuses.length > 0 && (
+            <span className="small muted">/</span>
+            <span className="small font-semibold">{caseItem.case_number}</span>
+          </div>
+          <h1>{caseItem.title}</h1>
+          <p>{caseItem.institution_name}</p>
+        </div>
+
+        <div className="page-header-actions">
+          {has("case.status.change") && permittedStatuses.length > 0 && (
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => {
+                setNewStatus(permittedStatuses[0]);
+                setShowStatusModal(true);
+              }}
+            >
+              Update Status &rarr;
+            </button>
+          )}
+
+          {activeEscalation &&
+            activeEscalation.status === "active" &&
+            has("escalation.manage") && (
               <button
                 type="button"
-                className="button button-primary"
+                className="button button-danger"
                 onClick={() => {
-                  setNewStatus(permittedStatuses[0]);
-                  setShowStatusModal(true);
+                  const notes = prompt(
+                    "Enter escalation acknowledgement remarks:",
+                  );
+                  if (notes) {
+                    simulationStore.acknowledgeEscalation(
+                      activeEscalation.escalation_id,
+                      notes,
+                    );
+                    reload();
+                  }
                 }}
               >
-                Change Status
+                Acknowledge Escalation
               </button>
             )}
-            <button type="button" className="button button-quiet" onClick={() => void reload()}>
-              Refresh
-            </button>
-          </div>
-        }
-      />
+        </div>
+      </div>
 
-      {/* Primary Header Card */}
+      {/* Case Overview Summary Hero Card */}
       <div className="card" style={{ marginBottom: "1.5rem" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "1rem" }}>
+        <div
+          className="case-summary-grid"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, 1fr)",
+            gap: "1rem",
+            borderBottom: "1px solid var(--color-border-subtle)",
+            paddingBottom: "1.25rem",
+            marginBottom: "1.25rem",
+          }}
+        >
           <div>
-            <h2 style={{ margin: "0 0 0.5rem 0" }}>{caseItem.title}</h2>
-            <div className="hint">
-              Institution: <strong>{caseItem.institution_name}</strong> | Category: {caseItem.category_name || "General"} | Region: {caseItem.institution_region || "N/A"}
-            </div>
-            <div className="hint" style={{ marginTop: "0.25rem" }}>
-              Opened: {formatDateTime(caseItem.opened_at)} | Last updated: {formatDateTime(caseItem.updated_at)}
+            <span className="small muted">Status</span>
+            <div style={{ marginTop: "0.25rem" }}>
+              <span className={`badge badge-status-${caseItem.status}`}>
+                {caseStatusLabel(caseItem.status)}
+              </span>
             </div>
           </div>
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <StatusBadge
-              value={caseItem.priority}
-              label={severityLabel(caseItem.priority)}
-            />
-            <StatusBadge
-              value={caseItem.status}
-              label={caseStatusLabel(caseItem.status)}
-            />
+
+          <div>
+            <span className="small muted">Priority</span>
+            <div style={{ marginTop: "0.25rem" }}>
+              <span className={`badge badge-priority-${caseItem.priority}`}>
+                {severityLabel(caseItem.priority)}
+              </span>
+            </div>
+          </div>
+
+          <div>
+            <span className="small muted">Lead Bureau</span>
+            <div
+              style={{
+                fontWeight: 600,
+                fontSize: "0.92rem",
+                marginTop: "0.25rem",
+              }}
+            >
+              {caseItem.lead_bureau_name} ({caseItem.lead_bureau_code})
+            </div>
+          </div>
+
+          <div>
+            <span className="small muted">SLA Target &amp; Countdown</span>
+            <div
+              style={{
+                fontWeight: 700,
+                fontSize: "0.92rem",
+                marginTop: "0.25rem",
+                color: isOverdue
+                  ? "var(--color-danger)"
+                  : isAtRisk
+                    ? "var(--color-warning)"
+                    : "var(--color-accent)",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.35rem",
+              }}
+            >
+              <IconClock className="w-4 h-4" />
+              {caseItem.status === "closed" || caseItem.status === "resolved"
+                ? "Completed"
+                : isOverdue
+                  ? `${Math.max(1, Math.ceil((now - targetDate) / 86400000))} days overdue`
+                  : isAtRisk
+                    ? `At Risk (${diffDays}d remaining)`
+                    : `${diffDays} days remaining`}
+            </div>
+          </div>
+        </div>
+
+        {/* Active Escalation Warning Banner */}
+        {activeEscalation && (
+          <div
+            style={{
+              background: "var(--color-danger-soft)",
+              border: "1px solid var(--color-danger-border)",
+              borderRadius: "var(--radius-md)",
+              padding: "0.85rem 1rem",
+              marginBottom: "1rem",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <div
+              style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}
+            >
+              <IconAlertTriangle className="w-5 h-5 text-danger" />
+              <div>
+                <strong style={{ color: "var(--color-danger)" }}>
+                  Active Escalation: {activeEscalation.level_name} (
+                  {activeEscalation.target_authority})
+                </strong>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: "0.8rem",
+                    color: "var(--color-danger)",
+                  }}
+                >
+                  {activeEscalation.reason}
+                </p>
+              </div>
+            </div>
+            <span className="badge badge-priority-critical">
+              LEVEL {activeEscalation.level}
+            </span>
+          </div>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            fontSize: "0.82rem",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          <div>
+            Institution Code:{" "}
+            <strong>{caseItem.institution_code || "Not recorded"}</strong> ·
+            Region: {caseItem.institution_region || "Northern"}
+          </div>
+          <div>
+            Opened: {formatDateTime(caseItem.opened_at)} · Last Action:{" "}
+            {formatDateTime(caseItem.updated_at)}
           </div>
         </div>
       </div>
 
-      {/* Tabs Navigation */}
-      <div style={{ display: "flex", gap: "0.5rem", borderBottom: "1px solid var(--color-border)", marginBottom: "1.5rem", overflowX: "auto" }}>
+      {/* Pill Tabs Navigation */}
+      <div className="pill-tabs case-tabs" style={{ marginBottom: "1.5rem" }}>
         <button
           type="button"
-          className={`button ${activeTab === "overview" ? "button-primary" : "button-quiet"}`}
+          className={`pill-tab ${activeTab === "overview" ? "active" : ""}`}
           onClick={() => setActiveTab("overview")}
         >
           Overview
         </button>
         <button
           type="button"
-          className={`button ${activeTab === "assignments" ? "button-primary" : "button-quiet"}`}
+          className={`pill-tab ${activeTab === "assignments" ? "active" : ""}`}
           onClick={() => setActiveTab("assignments")}
         >
-          Bureau & Officers ({collaboratingBureaus.length + 1})
+          Officers &amp; Bureaus (
+          {officerAssignments.length + collaboratingBureaus.length})
         </button>
         <button
           type="button"
-          className={`button ${activeTab === "timeline" ? "button-primary" : "button-quiet"}`}
+          className={`pill-tab ${activeTab === "timeline" ? "active" : ""}`}
           onClick={() => setActiveTab("timeline")}
         >
-          Timeline & History ({actionHistory.length})
+          Timeline &amp; Audit ({actionHistory.length})
         </button>
         <button
           type="button"
-          className={`button ${activeTab === "notes" ? "button-primary" : "button-quiet"}`}
+          className={`pill-tab ${activeTab === "notes" ? "active" : ""}`}
           onClick={() => setActiveTab("notes")}
         >
-          Internal Notes {caseItem.notes_count ? `(${caseItem.notes_count})` : ""}
+          Internal Notes ({caseItem.notes_count || 0})
         </button>
         <button
           type="button"
-          className={`button ${activeTab === "attachments" ? "button-primary" : "button-quiet"}`}
+          className={`pill-tab ${activeTab === "attachments" ? "active" : ""}`}
           onClick={() => setActiveTab("attachments")}
         >
-          Evidence & Attachments {caseItem.attachments_count ? `(${caseItem.attachments_count})` : ""}
+          Evidence &amp; Attachments ({caseItem.attachments_count || 0})
         </button>
         <button
           type="button"
-          className={`button ${activeTab === "transfers" ? "button-primary" : "button-quiet"}`}
+          className={`pill-tab ${activeTab === "transfers" ? "active" : ""}`}
           onClick={() => setActiveTab("transfers")}
         >
           Transfers
         </button>
         <button
           type="button"
-          className={`button ${activeTab === "access" ? "button-primary" : "button-quiet"}`}
+          className={`pill-tab ${activeTab === "access" ? "active" : ""}`}
           onClick={() => setActiveTab("access")}
         >
-          Access Grants
+          Cross-Bureau Grants
         </button>
+        {has("submission.view") && (
+          <button
+            type="button"
+            className={`pill-tab ${activeTab === "correspondence" ? "active" : ""}`}
+            onClick={() => setActiveTab("correspondence")}
+          >
+            Complainant correspondence
+          </button>
+        )}
       </div>
 
-      {/* Tab 1: Overview */}
+      {activeTab === "correspondence" && has("submission.view") && (
+        <PublicCorrespondence caseId={caseItem.case_id} />
+      )}
+      {/* TAB 1: OVERVIEW */}
       {activeTab === "overview" && (
-        <div style={{ display: "grid", gap: "1.5rem" }}>
+        <div className="case-overview-grid">
           <div className="card">
-            <h3>Complaint Description</h3>
-            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, marginTop: "0.5rem" }}>
+            <h3 style={{ marginBottom: "0.75rem" }}>
+              Grievance Statement &amp; Facts
+            </h3>
+            <div
+              style={{
+                background: "var(--color-canvas)",
+                padding: "1.25rem",
+                borderRadius: "var(--radius-lg)",
+                border: "1px solid var(--color-border)",
+                whiteSpace: "pre-wrap",
+                lineHeight: 1.6,
+                fontSize: "0.92rem",
+                color: "var(--color-text-primary)",
+              }}
+            >
               {caseItem.description}
             </div>
+
+            <h4 style={{ marginTop: "1.5rem", marginBottom: "0.5rem" }}>
+              Category Classification
+            </h4>
+            <p className="small muted">
+              Category: {caseItem.category_name}. Target:{" "}
+              {formatDateTime((caseItem as any).target_resolution_date)}.
+            </p>
           </div>
 
           <div className="card">
-            <h3>Institution & Routing Summary</h3>
-            <dl className="grid-2col" style={{ marginTop: "1rem" }}>
-              <dt>Institution Name</dt>
-              <dd><strong>{caseItem.institution_name}</strong></dd>
-              <dt>AICTE ID</dt>
-              <dd>{caseItem.institution_code || "Pending Verification"}</dd>
-              <dt>Region</dt>
-              <dd>{caseItem.institution_region || "Unassigned"}</dd>
-              <dt>Lead Bureau</dt>
-              <dd>{caseItem.lead_bureau_name ? `${caseItem.lead_bureau_name} (${caseItem.lead_bureau_code})` : "Unassigned"}</dd>
-              <dt>Collaborating Bureaus</dt>
-              <dd>
-                {collaboratingBureaus.length > 0
-                  ? collaboratingBureaus.map((b) => b.bureau_code).join(", ")
-                  : "None"}
-              </dd>
-              <dt>Source Submission ID</dt>
-              <dd><code>{caseItem.source_submission_id}</code></dd>
+            <h3 style={{ marginBottom: "0.75rem" }}>Institutional Profile</h3>
+            <dl
+              className="detail-list"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.75rem",
+              }}
+            >
+              <div>
+                <dt className="small muted">Official Name</dt>
+                <dd style={{ fontWeight: 600 }}>{caseItem.institution_name}</dd>
+              </div>
+              <div>
+                <dt className="small muted">AICTE Permanent ID</dt>
+                <dd className="mono">
+                  {caseItem.institution_code || "Not recorded"}
+                </dd>
+              </div>
+              <div>
+                <dt className="small muted">Regional Office</dt>
+                <dd>
+                  {caseItem.institution_region || "Northern Regional Office"}
+                </dd>
+              </div>
             </dl>
-          </div>
 
-          {relatedCases.length > 0 && (
-            <div className="card">
-              <h3>Related Cases</h3>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Case Number</th>
-                    <th>Title</th>
-                    <th>Relationship</th>
-                    <th>Linked At</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {relatedCases.map((rc) => (
-                    <tr key={rc.relationship_id}>
-                      <td><strong>{rc.related_case_number}</strong></td>
-                      <td>{rc.related_case_title}</td>
-                      <td><StatusBadge value="neutral" label={rc.relationship_type} /></td>
-                      <td>{formatDateTime(rc.created_at)}</td>
-                      <td>
-                        <Link to={`/cases/${rc.related_case_id}`} className="button button-small">
-                          View
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div
+              style={{
+                marginTop: "1.5rem",
+                paddingTop: "1rem",
+                borderTop: "1px solid var(--color-border-subtle)",
+              }}
+            >
+              <span className="small muted">Intake Source</span>
+              <p style={{ margin: "0.25rem 0 0", fontWeight: 600 }}>
+                {caseItem.source_submission_id}
+              </p>
             </div>
-          )}
+          </div>
         </div>
       )}
 
-      {/* Tab 2: Assignments */}
+      {/* TAB 2: ASSIGNMENTS */}
       {activeTab === "assignments" && (
-        <div style={{ display: "grid", gap: "1.5rem" }}>
-          <div className="card">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-              <h3>Bureau Assignments</h3>
-              {has("case.assign.bureau") && (
-                <button
-                  type="button"
-                  className="button button-small button-primary"
-                  onClick={() => setShowAssignBureauModal(true)}
-                >
-                  + Add Bureau Assignment
-                </button>
-              )}
+        <div className="card">
+          <div className="card-header-row">
+            <div>
+              <h3 className="card-title">Assigned Officers &amp; Bureaus</h3>
+              <p className="small muted">
+                Workload ownership and cross-bureau assignments.
+              </p>
             </div>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={!has("case.assign.bureau")}
+                onClick={() => setShowAssignBureauModal(true)}
+              >
+                + Add Collaborating Bureau
+              </button>
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={!has("case.assign.officer")}
+                onClick={() => {
+                  setTargetBureauAssignId(caseItem.lead_bureau_id || "");
+                  setTargetBureauId(caseItem.lead_bureau_id || "");
+                  if (has("case.assign.officer"))
+                    setShowAssignOfficerModal(true);
+                }}
+              >
+                + Assign Officer
+              </button>
+            </div>
+          </div>
 
-            <table className="table">
+          <h4 style={{ marginTop: "1rem", marginBottom: "0.5rem" }}>
+            Officer Assignments
+          </h4>
+          {officerAssignments.length === 0 ? (
+            <p className="small muted">
+              No officer has been designated as lead investigator yet.
+            </p>
+          ) : (
+            <table className="data-table" style={{ marginBottom: "1.5rem" }}>
               <thead>
                 <tr>
+                  <th>Officer</th>
                   <th>Bureau</th>
-                  <th>Assignment Type</th>
+                  <th>Role</th>
                   <th>Status</th>
                   <th>Assigned Date</th>
-                  <th>Officers</th>
-                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {caseItem.lead_bureau_id && (
-                  <tr>
+                {officerAssignments.map((oa) => (
+                  <tr key={oa.officer_assignment_id}>
                     <td>
-                      <strong>{caseItem.lead_bureau_name}</strong> ({caseItem.lead_bureau_code})
-                    </td>
-                    <td><StatusBadge value="warning" label="Lead Bureau" /></td>
-                    <td><StatusBadge value="success" label="Active" /></td>
-                    <td>{formatDateTime(caseItem.opened_at)}</td>
-                    <td>
-                      {officerAssignments.filter(o => o.bureau_name === caseItem.lead_bureau_name).map(o => (
-                        <div key={o.officer_assignment_id} style={{ fontSize: "0.85rem" }}>
-                          <strong>{o.officer_name}</strong> ({o.role.replace(/_/g, " ")})
-                        </div>
-                      )) || "None assigned"}
-                    </td>
-                    <td>
-                      {has("case.assign.officer") && (
-                        <button
-                          type="button"
-                          className="button button-small button-quiet"
-                          onClick={() => {
-                            setTargetBureauAssignId(caseItem.lead_bureau_id!);
-                            setTargetBureauId(caseItem.lead_bureau_id!);
-                            setShowAssignOfficerModal(true);
-                          }}
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.6rem",
+                        }}
+                      >
+                        <span
+                          className="persona-avatar-circle small"
+                          style={{ backgroundColor: "#155a37" }}
                         >
-                          Assign Officer
-                        </button>
-                      )}
+                          {oa.officer_name
+                            .split(" ")
+                            .map((n) => n[0])
+                            .slice(0, 2)
+                            .join("")}
+                        </span>
+                        <strong>{oa.officer_name}</strong>
+                      </div>
                     </td>
-                  </tr>
-                )}
-
-                {collaboratingBureaus.map((cb) => (
-                  <tr key={cb.bureau_id}>
+                    <td>{oa.bureau_name}</td>
                     <td>
-                      <strong>{cb.bureau_name}</strong> ({cb.bureau_code})
-                    </td>
-                    <td><StatusBadge value="neutral" label="Collaborating" /></td>
-                    <td><StatusBadge value="success" label={cb.assignment_status} /></td>
-                    <td>{formatDateTime(cb.assigned_at)}</td>
-                    <td>
-                      {officerAssignments.filter(o => o.bureau_name === cb.bureau_name).map(o => (
-                        <div key={o.officer_assignment_id} style={{ fontSize: "0.85rem" }}>
-                          <strong>{o.officer_name}</strong> ({o.role.replace(/_/g, " ")})
-                        </div>
-                      )) || "None assigned"}
+                      <span className="badge badge-priority-normal">
+                        {oa.role.replace(/_/g, " ")}
+                      </span>
                     </td>
                     <td>
-                      {has("case.assign.officer") && (
-                        <button
-                          type="button"
-                          className="button button-small button-quiet"
-                          onClick={() => {
-                            setTargetBureauAssignId(cb.bureau_id);
-                            setTargetBureauId(cb.bureau_id);
-                            setShowAssignOfficerModal(true);
-                          }}
-                        >
-                          Assign Officer
-                        </button>
-                      )}
+                      <span className="badge badge-status-resolved">
+                        {oa.status}
+                      </span>
                     </td>
+                    <td>{formatDateTime(oa.assigned_at)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+          )}
+
+          <h4 style={{ marginTop: "1rem", marginBottom: "0.5rem" }}>
+            Involved Bureaus
+          </h4>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Bureau</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Assigned Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <strong>
+                    {caseItem.lead_bureau_name} ({caseItem.lead_bureau_code})
+                  </strong>
+                </td>
+                <td>
+                  <span className="badge badge-priority-high">Lead Bureau</span>
+                </td>
+                <td>
+                  <span className="badge badge-status-resolved">Active</span>
+                </td>
+                <td>{formatDateTime(caseItem.opened_at)}</td>
+              </tr>
+              {collaboratingBureaus.map((cb) => (
+                <tr key={cb.bureau_id}>
+                  <td>
+                    {cb.bureau_name} ({cb.bureau_code})
+                  </td>
+                  <td>
+                    <span className="badge badge-priority-normal">
+                      Collaborating
+                    </span>
+                  </td>
+                  <td>
+                    <span className="badge badge-status-assigned">
+                      {cb.assignment_status}
+                    </span>
+                  </td>
+                  <td>{formatDateTime(cb.assigned_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {/* Tab 3: Timeline & History */}
+      {/* TAB 3: TIMELINE & AUDIT LOG */}
       {activeTab === "timeline" && (
         <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-            <h3>Action & Audit History</h3>
-            <span className="hint">Immutable append-only chronological log</span>
-          </div>
+          <h3 className="card-title" style={{ marginBottom: "1.25rem" }}>
+            Immutable Action History &amp; Audit Trail
+          </h3>
 
-          {actionHistory.length === 0 ? (
-            <EmptyState title="No recorded actions" description="No actions have been logged for this case." />
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              {actionHistory.map((act) => (
+          <ol
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
+            }}
+          >
+            {actionHistory.map((act) => (
+              <li
+                key={act.action_id}
+                style={{
+                  display: "flex",
+                  gap: "1rem",
+                  paddingBottom: "1rem",
+                  borderBottom: "1px solid var(--color-border-subtle)",
+                }}
+              >
                 <div
-                  key={act.action_id}
                   style={{
-                    padding: "0.75rem 1rem",
-                    borderLeft: "3px solid var(--color-primary)",
-                    background: "var(--color-surface-subtle, rgba(0,0,0,0.02))",
-                    borderRadius: "0 6px 6px 0",
+                    width: "32px",
+                    height: "32px",
+                    borderRadius: "50%",
+                    background: "var(--color-accent-soft)",
+                    color: "var(--color-accent)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
                   }}
                 >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap" }}>
-                    <strong>{act.action_type.replace(/_/g, " ").toUpperCase()}</strong>
-                    <span className="hint">{formatDateTime(act.created_at)}</span>
-                  </div>
-                  <div style={{ marginTop: "0.25rem" }}>{act.action_description}</div>
-                  {act.previous_status && act.new_status && (
-                    <div style={{ marginTop: "0.25rem", fontSize: "0.85rem" }} className="hint">
-                      Transition: <code>{act.previous_status}</code> → <code>{act.new_status}</code>
-                    </div>
-                  )}
+                  <IconShield className="w-4 h-4" />
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Tab 4: Internal Notes */}
-      {activeTab === "notes" && (
-        <div style={{ display: "grid", gap: "1.5rem" }}>
-          <div className="card">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-              <div>
-                <h3 style={{ margin: 0 }}>Internal Case Notes</h3>
-                <span className="hint">Shared across assigned bureaus or private to bureau</span>
-              </div>
-              {has("case.note.create") && (
-                <button
-                  type="button"
-                  className="button button-primary button-small"
-                  onClick={() => setShowNoteModal(true)}
-                >
-                  + Add Note
-                </button>
-              )}
-            </div>
-
-            {!notes || notes.length === 0 ? (
-              <EmptyState title="No notes recorded" description="Add shared notes for cross-bureau coordination or private notes for bureau members." />
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-                {notes.map((note) => (
+                <div style={{ flex: 1 }}>
                   <div
-                    key={note.note_id}
                     style={{
-                      padding: "1rem",
-                      border: note.is_pinned ? "1px solid var(--color-warning)" : "1px solid var(--color-border)",
-                      borderRadius: "6px",
-                      background: note.is_pinned ? "rgba(234, 179, 8, 0.05)" : "var(--color-surface)",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      marginBottom: "0.25rem",
                     }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
-                      <div>
-                        <strong>{note.author_name}</strong>
-                        {note.bureau_name && <span className="hint"> ({note.bureau_code})</span>}
-                        <span style={{ margin: "0 0.5rem" }}>•</span>
-                        <span className="hint">{formatDateTime(note.created_at)}</span>
-                      </div>
-                      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                        <StatusBadge
-                          value={note.visibility === "shared" ? "success" : "warning"}
-                          label={note.visibility === "shared" ? "Shared" : `Private: ${note.bureau_code || "Bureau"}`}
-                        />
-                        <StatusBadge value="neutral" label={note.note_type.replace(/_/g, " ")} />
-                        {note.is_pinned && <span title="Pinned Note">📌</span>}
-                        {has("case.note.edit") && (
-                          <button
-                            type="button"
-                            className="button button-small button-quiet"
-                            onClick={async () => {
-                              if (confirm("Soft delete this note?")) {
-                                await api.delete(`/cases/${caseItem.case_id}/notes/${note.note_id}`);
-                                await reloadNotes();
-                              }
-                            }}
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{note.note_text}</div>
+                    <strong style={{ fontSize: "0.88rem" }}>
+                      {act.action_description}
+                    </strong>
+                    <span className="small muted">
+                      {formatDateTime(act.created_at)}
+                    </span>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  <div className="small muted">
+                    Performed by:{" "}
+                    <strong>
+                      {(act as any).actor_name || "Authorized Official"}
+                    </strong>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ol>
         </div>
       )}
 
-      {/* Tab 5: Attachments */}
-      {activeTab === "attachments" && (
+      {/* TAB 4: NOTES */}
+      {activeTab === "notes" && (
         <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+          <div className="card-header-row">
             <div>
-              <h3 style={{ margin: 0 }}>Evidence & Case Attachments</h3>
-              <span className="hint">Verified secure attachments stored in private buckets</span>
+              <h3 className="card-title">Case Notes &amp; Observations</h3>
+              <p className="small muted">
+                Shared observations and bureau-private deliberations.
+              </p>
             </div>
-            {has("attachment.upload") && (
+            {has("case.note.create") && (
               <button
                 type="button"
-                className="button button-primary button-small"
-                onClick={() => setShowAttachmentModal(true)}
+                className="button button-primary"
+                onClick={() => setShowNoteModal(true)}
               >
-                + Attach Evidence
+                <IconPlus className="w-4 h-4" /> Add Note
               </button>
             )}
           </div>
 
-          {!attachments || attachments.length === 0 ? (
-            <EmptyState title="No attachments found" description="Upload supporting documents, evidence, or resolution orders." />
-          ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Filename</th>
-                  <th>Type</th>
-                  <th>Size</th>
-                  <th>Status</th>
-                  <th>Uploaded By</th>
-                  <th>Date</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {attachments.map((att) => (
-                  <tr key={att.attachment_id}>
-                    <td>
-                      <strong>📄 {att.original_filename}</strong>
-                      {att.description && <div className="hint" style={{ fontSize: "0.8rem" }}>{att.description}</div>}
-                    </td>
-                    <td><StatusBadge value="neutral" label={att.attachment_type.replace(/_/g, " ")} /></td>
-                    <td>{formatFileSize(att.file_size_bytes)}</td>
-                    <td><StatusBadge value="success" label={att.upload_status} /></td>
-                    <td>{att.uploader_name || "System Intake"}</td>
-                    <td>{formatDateTime(att.uploaded_at)}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="button button-small button-quiet"
-                        onClick={() => alert(`Simulated secure download for ${att.original_filename}. Signed token issued.`)}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
+              marginTop: "1rem",
+            }}
+          >
+            {notes && notes.length > 0 ? (
+              notes.map((n) => (
+                <div
+                  key={n.note_id}
+                  style={{
+                    background:
+                      n.visibility === "bureau_private"
+                        ? "#fef3c7"
+                        : "var(--color-surface-white)",
+                    border: `1px solid ${n.visibility === "bureau_private" ? "#fde68a" : "var(--color-border)"}`,
+                    borderRadius: "var(--radius-lg)",
+                    padding: "1.1rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      marginBottom: "0.5rem",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.5rem",
+                      }}
+                    >
+                      <strong>{n.author_name}</strong>
+                      <span className="small muted">
+                        ({n.bureau_name || "Approval Bureau"})
+                      </span>
+                      <span
+                        className={`badge ${n.visibility === "bureau_private" ? "badge-priority-high" : "badge-priority-normal"}`}
                       >
-                        Download
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+                        {n.visibility === "bureau_private"
+                          ? "Bureau Private"
+                          : "Shared"}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.5rem",
+                      }}
+                    >
+                      <span className="small muted">
+                        {formatDateTime(n.created_at)}
+                      </span>
+                      {has("case.note.delete") && (
+                        <button
+                          type="button"
+                          className="button button-quiet"
+                          style={{
+                            padding: "0.2rem 0.4rem",
+                            fontSize: "0.75rem",
+                            color: "var(--color-danger)",
+                          }}
+                          onClick={() => handleDeleteNote(n.note_id)}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      whiteSpace: "pre-wrap",
+                      lineHeight: 1.5,
+                      fontSize: "0.88rem",
+                    }}
+                  >
+                    {n.note_text}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="small muted">No internal notes added yet.</p>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Tab 6: Transfers */}
-      {activeTab === "transfers" && (
+      {/* TAB 5: EVIDENCE & ATTACHMENTS (REAL BROWSER PERSISTENCE & PREVIEW) */}
+      {activeTab === "attachments" && (
         <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+          <div className="card-header-row">
             <div>
-              <h3 style={{ margin: 0 }}>Inter-Bureau Case Transfers</h3>
-              <span className="hint">Transfer case lead or handover responsibility to another bureau</span>
+              <h3 className="card-title">
+                Evidence &amp; Uploaded Attachments
+              </h3>
+              <p className="small muted">
+                Original supporting files with preview and download.
+              </p>
             </div>
-            {has("case.transfer.request") && (
+            {has("attachment.upload") && (
               <button
                 type="button"
-                className="button button-primary button-small"
-                onClick={() => {
-                  if (caseItem.lead_bureau_id) {
-                    setTransferFromAssignId(caseItem.lead_bureau_id);
-                  }
-                  setShowTransferModal(true);
-                }}
+                className="button button-primary"
+                onClick={() => setShowAttachmentModal(true)}
+              >
+                <IconPaperclip className="w-4 h-4" /> Upload Document
+              </button>
+            )}
+          </div>
+
+          <table className="data-table" style={{ marginTop: "1rem" }}>
+            <thead>
+              <tr>
+                <th>Document Filename</th>
+                <th>Classification</th>
+                <th>File Size</th>
+                <th>Uploaded By</th>
+                <th>Date</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {attachments && attachments.length > 0 ? (
+                attachments.map((att) => (
+                  <tr key={att.attachment_id}>
+                    <td>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                        }}
+                      >
+                        <IconPaperclip className="w-4 h-4 text-accent" />
+                        <div>
+                          <strong>
+                            {att.filename || att.original_filename}
+                          </strong>
+                          {att.description && (
+                            <div className="small muted">{att.description}</div>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="badge badge-priority-normal">
+                        {(att.attachment_type || "Evidence").replace(/_/g, " ")}
+                      </span>
+                    </td>
+                    <td>
+                      {formatFileSize(
+                        att.file_size_bytes || att.file_size || 1024 * 50,
+                      )}
+                    </td>
+                    <td>{att.uploaded_by_name || "Officer"}</td>
+                    <td>{formatDateTime(att.uploaded_at)}</td>
+                    <td>
+                      {att.is_quarantined ? (
+                        <span className="badge badge-priority-critical">
+                          QUARANTINED
+                        </span>
+                      ) : (
+                        <span className="badge badge-status-resolved">
+                          Available
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <div style={{ display: "flex", gap: "0.4rem" }}>
+                        <button
+                          type="button"
+                          className="button button-secondary"
+                          style={{
+                            padding: "0.25rem 0.6rem",
+                            fontSize: "0.75rem",
+                          }}
+                          onClick={() => setPreviewAttachment(att)}
+                        >
+                          Preview
+                        </button>
+                        <button
+                          type="button"
+                          className="button button-quiet"
+                          style={{
+                            padding: "0.25rem 0.6rem",
+                            fontSize: "0.75rem",
+                          }}
+                          onClick={() => handleDownloadAttachment(att)}
+                          disabled={att.is_quarantined}
+                        >
+                          <IconDownload className="w-3.5 h-3.5" /> Download
+                        </button>
+                        {!att.is_quarantined &&
+                          has("attachment.quarantine") && (
+                            <button
+                              type="button"
+                              className="button button-quiet"
+                              style={{
+                                padding: "0.25rem 0.5rem",
+                                fontSize: "0.72rem",
+                                color: "var(--color-danger)",
+                              }}
+                              onClick={() => handleQuarantine(att)}
+                            >
+                              Quarantine
+                            </button>
+                          )}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td
+                    colSpan={7}
+                    style={{
+                      textAlign: "center",
+                      padding: "2rem",
+                      color: "var(--color-text-muted)",
+                    }}
+                  >
+                    No attachments uploaded for this case yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* TAB 6: TRANSFERS */}
+      {activeTab === "transfers" && (
+        <div className="card">
+          <div className="card-header-row">
+            <div>
+              <h3 className="card-title">Case Ownership Transfers</h3>
+              <p className="small muted">
+                Formal handover of lead bureau responsibility.
+              </p>
+            </div>
+            {has("case.transfer.manage") && (
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => setShowTransferModal(true)}
               >
                 + Request Case Transfer
               </button>
             )}
           </div>
-          <p className="hint">
-            Case transfer maintains full historical integrity. Past assignment history and notes remain attributed to the source bureau.
-          </p>
-        </div>
-      )}
 
-      {/* Tab 7: Access Grants */}
-      {activeTab === "access" && (
-        <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-            <div>
-              <h3 style={{ margin: 0 }}>Cross-Bureau Access Grants</h3>
-              <span className="hint">Explicit time-bounded or permanent access grants to this case</span>
-            </div>
-          </div>
-
-          {!accessGrants || accessGrants.length === 0 ? (
-            <EmptyState title="No external access grants" description="This case has no active cross-bureau guest access grants." />
-          ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Grantee</th>
-                  <th>Level</th>
-                  <th>Granted By</th>
-                  <th>Granted At</th>
-                  <th>Status</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {accessGrants.map((ag) => (
-                  <tr key={ag.grant_id}>
-                    <td><strong>{ag.grantee_name}</strong></td>
-                    <td><StatusBadge value="neutral" label={ag.access_level} /></td>
-                    <td>{ag.granted_by_name}</td>
-                    <td>{formatDateTime(ag.granted_at)}</td>
+          <table className="data-table" style={{ marginTop: "1rem" }}>
+            <thead>
+              <tr>
+                <th>From Bureau</th>
+                <th>To Bureau</th>
+                <th>Type</th>
+                <th>Reason</th>
+                <th>Status</th>
+                <th>Requested Date</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.transfers
+                .filter((t) => t.case_id === caseItem.case_id)
+                .map((trf) => (
+                  <tr key={trf.transfer_id}>
+                    <td>{trf.from_bureau_name}</td>
                     <td>
-                      <StatusBadge
-                        value={ag.is_active ? "success" : "danger"}
-                        label={ag.is_active ? "Active" : "Revoked"}
-                      />
+                      <strong>{trf.to_bureau_name}</strong>
                     </td>
                     <td>
-                      {ag.is_active && has("case.access.revoke") && (
-                        <button
-                          type="button"
-                          className="button button-small button-quiet"
-                          onClick={async () => {
-                            const reason = prompt("Enter revocation reason:");
-                            if (reason) {
-                              await api.post(`/access-grants/${ag.grant_id}/revoke`, { revocation_reason: reason });
-                              await reloadGrants();
-                            }
-                          }}
-                        >
-                          Revoke
-                        </button>
-                      )}
+                      <span className="badge badge-priority-normal">
+                        {trf.transfer_type}
+                      </span>
+                    </td>
+                    <td style={{ maxWidth: "240px" }}>{trf.reason}</td>
+                    <td>
+                      <span
+                        className={`badge ${trf.status === "approved" ? "badge-status-resolved" : "badge-priority-high"}`}
+                      >
+                        {trf.status}
+                      </span>
+                    </td>
+                    <td>{formatDateTime(trf.requested_at)}</td>
+                    <td>
+                      {trf.status === "pending" &&
+                        has("case.transfer.manage") && (
+                          <button
+                            className="button button-quiet"
+                            onClick={() => {
+                              const reason = prompt(
+                                "Reason for declining this transfer:",
+                              );
+                              if (reason?.trim()) {
+                                simulationStore.rejectTransfer(
+                                  trf.transfer_id,
+                                  reason,
+                                );
+                                void reload();
+                              }
+                            }}
+                          >
+                            Decline
+                          </button>
+                        )}
+                      {trf.status === "pending" &&
+                        has("case.transfer.manage") && (
+                          <button
+                            type="button"
+                            className="button button-primary"
+                            style={{
+                              padding: "0.25rem 0.6rem",
+                              fontSize: "0.75rem",
+                            }}
+                            onClick={() => {
+                              simulationStore.approveTransfer(trf.transfer_id);
+                              reload();
+                            }}
+                          >
+                            Approve Transfer
+                          </button>
+                        )}
                     </td>
                   </tr>
                 ))}
-              </tbody>
-            </table>
-          )}
+              {state.transfers.filter((t) => t.case_id === caseItem.case_id)
+                .length === 0 && (
+                <tr>
+                  <td
+                    colSpan={7}
+                    style={{
+                      textAlign: "center",
+                      padding: "2rem",
+                      color: "var(--color-text-muted)",
+                    }}
+                  >
+                    No bureau transfers requested for this case.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {/* Status Transition Modal */}
+      {/* TAB 7: CROSS-BUREAU ACCESS GRANTS */}
+      {activeTab === "access" && (
+        <div className="card">
+          <div className="card-header-row">
+            <div>
+              <h3 className="card-title">Cross-Bureau Access Grants</h3>
+              <p className="small muted">
+                Time-bound visibility and collaboration access for outside
+                bureaus.
+              </p>
+            </div>
+            {activePersona.bureauId && (
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => setShowAccessModal(true)}
+              >
+                + Request Cross-Bureau Access
+              </button>
+            )}
+          </div>
+
+          <table className="data-table" style={{ marginTop: "1rem" }}>
+            <thead>
+              <tr>
+                <th>Requesting Bureau</th>
+                <th>Requested By</th>
+                <th>Scope</th>
+                <th>Justification</th>
+                <th>Status</th>
+                <th>Expires</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {accessGrants && accessGrants.length > 0 ? (
+                accessGrants.map((ag) => (
+                  <tr key={ag.grant_id}>
+                    <td>
+                      <strong>{ag.grantee_bureau_name}</strong>
+                    </td>
+                    <td>{ag.grantee_user_name || "Officer"}</td>
+                    <td>
+                      <span className="badge badge-priority-normal">
+                        {ag.access_level}
+                      </span>
+                    </td>
+                    <td style={{ maxWidth: "220px" }}>{ag.justification}</td>
+                    <td>
+                      <span
+                        className={`badge ${ag.status === "approved" ? "badge-status-resolved" : ag.status === "revoked" ? "badge-status-closed" : "badge-priority-high"}`}
+                      >
+                        {ag.status}
+                      </span>
+                    </td>
+                    <td>
+                      {ag.expires_at
+                        ? formatDateTime(ag.expires_at)
+                        : "30 days from grant"}
+                    </td>
+                    <td>
+                      {ag.status === "pending" && has("case.access.manage") && (
+                        <button
+                          className="button button-quiet"
+                          onClick={() => {
+                            const reason = prompt(
+                              "Reason for denying this access request:",
+                            );
+                            if (reason?.trim()) {
+                              simulationStore.rejectAccess(ag.grant_id, reason);
+                              void reloadGrants();
+                            }
+                          }}
+                        >
+                          Deny
+                        </button>
+                      )}
+                      {ag.status === "pending" && has("case.access.manage") && (
+                        <button
+                          type="button"
+                          className="button button-primary"
+                          style={{
+                            padding: "0.25rem 0.6rem",
+                            fontSize: "0.75rem",
+                          }}
+                          onClick={() => {
+                            simulationStore.approveAccess(ag.grant_id);
+                            reloadGrants();
+                          }}
+                        >
+                          Approve Grant
+                        </button>
+                      )}
+                      {ag.status === "approved" &&
+                        has("case.access.manage") && (
+                          <button
+                            type="button"
+                            className="button button-quiet"
+                            style={{
+                              padding: "0.25rem 0.6rem",
+                              fontSize: "0.75rem",
+                              color: "var(--color-danger)",
+                            }}
+                            onClick={() => {
+                              const reason = prompt(
+                                "Specify revocation reason:",
+                              );
+                              if (reason) {
+                                simulationStore.revokeAccess(
+                                  ag.grant_id,
+                                  reason,
+                                );
+                                reloadGrants();
+                              }
+                            }}
+                          >
+                            Revoke
+                          </button>
+                        )}
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td
+                    colSpan={7}
+                    style={{
+                      textAlign: "center",
+                      padding: "2rem",
+                      color: "var(--color-text-muted)",
+                    }}
+                  >
+                    No cross-bureau access requests found for this case.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* MODAL 1: STATUS TRANSITION */}
       {showStatusModal && (
-        <div style={modalBackdropStyle}>
-          <div className="card" style={modalCardStyle}>
-            <h3>Transition Case Status</h3>
-            <p className="hint">
-              Current status: <strong>{caseStatusLabel(caseItem.status)}</strong>.
-            </p>
-            {statusError && <div className="callout callout-danger" style={{ marginBottom: "1rem" }}>{statusError}</div>}
+        <div
+          className="modal-backdrop"
+          onClick={() => setShowStatusModal(false)}
+        >
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Execute Status Transition</h3>
+              <button
+                type="button"
+                className="btn-icon-close"
+                onClick={() => setShowStatusModal(false)}
+              >
+                <IconClose className="w-4 h-4" />
+              </button>
+            </div>
+            {statusError && (
+              <div className="badge badge-priority-critical">{statusError}</div>
+            )}
             <form onSubmit={handleStatusTransition}>
               <label>
-                New Status
-                <select value={newStatus} onChange={(e) => setNewStatus(e.target.value)}>
+                Permitted Target Status
+                <select
+                  value={newStatus}
+                  onChange={(e) => setNewStatus(e.target.value)}
+                >
                   {permittedStatuses.map((st) => (
                     <option key={st} value={st}>
                       {caseStatusLabel(st)}
@@ -911,21 +1561,29 @@ export function CaseDetailPage() {
                 </select>
               </label>
               <label>
-                Transition Remarks / Justification
+                Reason for status change
                 <textarea
                   rows={3}
                   required
-                  placeholder="Explain why this status transition is being made..."
+                  placeholder="Record mandatory rationale for this status update..."
                   value={statusReason}
                   onChange={(e) => setStatusReason(e.target.value)}
                 />
               </label>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
-                <button type="button" className="button button-quiet" onClick={() => setShowStatusModal(false)}>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => setShowStatusModal(false)}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="button button-primary" disabled={statusSubmitting}>
-                  {statusSubmitting ? "Updating..." : "Execute Transition"}
+                <button
+                  type="submit"
+                  className="button button-primary"
+                  disabled={statusSubmitting}
+                >
+                  {statusSubmitting ? "Updating..." : "Execute Status Change"}
                 </button>
               </div>
             </form>
@@ -933,27 +1591,62 @@ export function CaseDetailPage() {
         </div>
       )}
 
-      {/* Add Note Modal */}
+      {/* MODAL 2: ADD NOTE */}
       {showNoteModal && (
-        <div style={modalBackdropStyle}>
-          <div className="card" style={modalCardStyle}>
-            <h3>Add Internal Case Note</h3>
-            {noteError && <div className="callout callout-danger" style={{ marginBottom: "1rem" }}>{noteError}</div>}
+        <div className="modal-backdrop" onClick={() => setShowNoteModal(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Add Case Note</h3>
+              <button
+                type="button"
+                className="btn-icon-close"
+                onClick={() => setShowNoteModal(false)}
+              >
+                <IconClose className="w-4 h-4" />
+              </button>
+            </div>
+            {noteError && (
+              <div
+                className="badge badge-priority-critical"
+                style={{ margin: "0.5rem 1.5rem" }}
+              >
+                {noteError}
+              </div>
+            )}
             <form onSubmit={handleAddNote}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "1rem",
+                }}
+              >
                 <label>
-                  Visibility
-                  <select value={noteVisibility} onChange={(e) => setNoteVisibility(e.target.value as any)}>
-                    <option value="shared">Shared (All Assigned Bureaus)</option>
-                    <option value="bureau_private">Bureau-Private (My Bureau Only)</option>
+                  Visibility Scope
+                  <select
+                    value={noteVisibility}
+                    onChange={(e) => setNoteVisibility(e.target.value as any)}
+                  >
+                    <option value="shared">
+                      Shared (All Assigned Bureaus)
+                    </option>
+                    <option
+                      disabled={!activePersona.bureauId}
+                      value="bureau_private"
+                    >
+                      Bureau-Private (My Bureau Only)
+                    </option>
                   </select>
                 </label>
                 <label>
                   Note Type
-                  <select value={noteType} onChange={(e) => setNoteType(e.target.value as any)}>
+                  <select
+                    value={noteType}
+                    onChange={(e) => setNoteType(e.target.value as any)}
+                  >
                     <option value="general">General</option>
                     <option value="internal_review">Internal Review</option>
-                    <option value="resolution">Resolution</option>
+                    <option value="resolution">Resolution Order</option>
                     <option value="handover">Handover</option>
                   </select>
                 </label>
@@ -963,16 +1656,24 @@ export function CaseDetailPage() {
                 <textarea
                   rows={4}
                   required
-                  placeholder="Enter detailed internal observations, instructions or meeting records..."
+                  placeholder="Record observations, directives, or inspection findings..."
                   value={noteText}
                   onChange={(e) => setNoteText(e.target.value)}
                 />
               </label>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
-                <button type="button" className="button button-quiet" onClick={() => setShowNoteModal(false)}>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => setShowNoteModal(false)}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="button button-primary" disabled={noteSubmitting}>
+                <button
+                  type="submit"
+                  className="button button-primary"
+                  disabled={noteSubmitting}
+                >
                   {noteSubmitting ? "Saving..." : "Save Note"}
                 </button>
               </div>
@@ -981,46 +1682,85 @@ export function CaseDetailPage() {
         </div>
       )}
 
-      {/* Assign Bureau Modal */}
-      {showAssignBureauModal && (
-        <div style={modalBackdropStyle}>
-          <div className="card" style={modalCardStyle}>
-            <h3>Assign Bureau to Case</h3>
-            {assignError && <div className="callout callout-danger" style={{ marginBottom: "1rem" }}>{assignError}</div>}
-            <form onSubmit={handleAssignBureau}>
+      {/* MODAL 3: UPLOAD ATTACHMENT */}
+      {showAttachmentModal && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setShowAttachmentModal(false)}
+        >
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Upload Evidence Attachment</h3>
+              <button
+                type="button"
+                className="btn-icon-close"
+                onClick={() => setShowAttachmentModal(false)}
+              >
+                <IconClose className="w-4 h-4" />
+              </button>
+            </div>
+            {attachError && (
+              <div className="badge badge-priority-critical">{attachError}</div>
+            )}
+            <form onSubmit={handleUploadAttachment}>
               <label>
-                Select Bureau
-                <select value={selectedBureauId} onChange={(e) => setSelectedBureauId(e.target.value)} required>
-                  <option value="">-- Choose Bureau --</option>
-                  {bureaus?.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name} ({b.code})
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Assignment Role
-                <select value={assignType} onChange={(e) => setAssignType(e.target.value as any)}>
-                  <option value="collaborating">Collaborating Bureau</option>
-                  <option value="lead">Lead Bureau</option>
-                </select>
-              </label>
-              <label>
-                Assignment Reason
-                <textarea
-                  rows={3}
-                  placeholder="Specify coordination reason..."
-                  value={assignReason}
-                  onChange={(e) => setAssignReason(e.target.value)}
+                Select File (PDF, PNG, JPG, DOCX, TXT)
+                <input
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.txt"
+                  required
+                  onChange={handleFileChange}
                 />
               </label>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
-                <button type="button" className="button button-quiet" onClick={() => setShowAssignBureauModal(false)}>
+              {selectedFile && (
+                <div
+                  className="small muted"
+                  style={{ marginBottom: "0.75rem" }}
+                >
+                  Selected: <strong>{selectedFile.name}</strong> (
+                  {formatFileSize(selectedFile.size)})
+                </div>
+              )}
+              <label>
+                Classification
+                <select
+                  value={attachType}
+                  onChange={(e) => setAttachType(e.target.value)}
+                >
+                  <option value="supporting_document">
+                    Supporting Document
+                  </option>
+                  <option value="inspection_report">Inspection Report</option>
+                  <option value="show_cause_notice">Show Cause Notice</option>
+                  <option value="institution_reply">
+                    Institution Response
+                  </option>
+                  <option value="resolution_order">Resolution Order</option>
+                </select>
+              </label>
+              <label>
+                Description
+                <input
+                  type="text"
+                  placeholder="Brief summary of document..."
+                  value={attachDescription}
+                  onChange={(e) => setAttachDescription(e.target.value)}
+                />
+              </label>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => setShowAttachmentModal(false)}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="button button-primary" disabled={assignSubmitting}>
-                  {assignSubmitting ? "Assigning..." : "Confirm Assignment"}
+                <button
+                  type="submit"
+                  className="button button-primary"
+                  disabled={attachSubmitting}
+                >
+                  {attachSubmitting ? "Uploading..." : "Save Attachment"}
                 </button>
               </div>
             </form>
@@ -1028,47 +1768,223 @@ export function CaseDetailPage() {
         </div>
       )}
 
-      {/* Assign Officer Modal */}
+      {/* PREVIEW MODAL */}
+      {previewAttachment && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setPreviewAttachment(null)}
+        >
+          <div
+            className="modal-dialog"
+            style={{ width: "800px", maxHeight: "85vh" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h3>
+                Document Preview:{" "}
+                {previewAttachment.filename ||
+                  previewAttachment.original_filename}
+              </h3>
+              <button
+                type="button"
+                className="btn-icon-close"
+                onClick={() => setPreviewAttachment(null)}
+              >
+                <IconClose className="w-4 h-4" />
+              </button>
+            </div>
+            <div
+              style={{
+                height: "450px",
+                overflow: "hidden",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "#f8fafc",
+                borderRadius: "var(--radius-lg)",
+              }}
+            >
+              {previewAttachment.mime_type?.startsWith("image/") ? (
+                <img
+                  src={previewAttachment.data_url}
+                  alt={previewAttachment.filename}
+                  style={{
+                    maxWidth: "100%",
+                    maxHeight: "100%",
+                    objectFit: "contain",
+                  }}
+                />
+              ) : previewAttachment.mime_type?.startsWith("text/") ? (
+                <iframe
+                  sandbox=""
+                  src={previewAttachment.data_url}
+                  title="Text evidence preview"
+                  style={{ width: "100%", height: "100%", border: 0 }}
+                />
+              ) : previewAttachment.mime_type === "application/pdf" ? (
+                <PdfPreview source={previewAttachment.data_url} />
+              ) : (
+                <div style={{ padding: "2rem", textAlign: "center" }}>
+                  <IconPaperclip
+                    className="w-12 h-12 text-accent"
+                    style={{ margin: "0 auto 1rem" }}
+                  />
+                  <p>
+                    <strong>
+                      {previewAttachment.filename ||
+                        previewAttachment.original_filename}
+                    </strong>
+                  </p>
+                  <p className="small muted">
+                    Binary document (
+                    {formatFileSize(previewAttachment.file_size || 1024 * 50)})
+                  </p>
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    onClick={() => handleDownloadAttachment(previewAttachment)}
+                  >
+                    Download to View
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="button button-quiet"
+                onClick={() => setPreviewAttachment(null)}
+              >
+                Close Preview
+              </button>
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => handleDownloadAttachment(previewAttachment)}
+              >
+                <IconDownload className="w-4 h-4" /> Download File
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: ASSIGN OFFICER */}
       {showAssignOfficerModal && (
-        <div style={modalBackdropStyle}>
-          <div className="card" style={modalCardStyle}>
-            <h3>Assign Bureau Officer</h3>
-            {officerError && <div className="callout callout-danger" style={{ marginBottom: "1rem" }}>{officerError}</div>}
+        <div
+          className="modal-backdrop"
+          onClick={() => setShowAssignOfficerModal(false)}
+        >
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Assign Officer</h3>
+              <button
+                type="button"
+                className="btn-icon-close"
+                onClick={() => setShowAssignOfficerModal(false)}
+              >
+                <IconClose className="w-4 h-4" />
+              </button>
+            </div>
+            {officerError && (
+              <div
+                className="badge badge-priority-critical"
+                style={{ margin: "0.5rem 1.5rem" }}
+              >
+                {officerError}
+              </div>
+            )}
             <form onSubmit={handleAssignOfficer}>
               <label>
+                Assignment bureau
+                <select
+                  value={targetBureauAssignId}
+                  onChange={(e) => {
+                    setTargetBureauAssignId(e.target.value);
+                    setOfficerUserId("");
+                  }}
+                >
+                  {[
+                    caseItem.lead_bureau_id,
+                    ...collaboratingBureaus
+                      .filter((b) => b.assignment_status === "active")
+                      .map((b) => b.bureau_id),
+                  ]
+                    .filter((id, i, all) => all.indexOf(id) === i)
+                    .map((id) => (
+                      <option value={id || ""} key={id}>
+                        {state.bureaus.find((b) => b.id === id)?.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
                 Select Officer
-                <select value={officerUserId} onChange={(e) => setOfficerUserId(e.target.value)} required>
+                <select
+                  value={officerUserId}
+                  onChange={(e) => setOfficerUserId(e.target.value)}
+                  required
+                >
                   <option value="">-- Choose Officer --</option>
-                  {bureauMembers?.map((m) => (
-                    <option key={m.user_id} value={m.user_id}>
-                      {m.full_name} ({m.official_email})
-                    </option>
-                  ))}
+                  {state.bureauMembers
+                    .filter(
+                      (m) =>
+                        m.is_active && m.bureau_id === targetBureauAssignId,
+                    )
+                    .map((m) => (
+                      <option key={m.user_id} value={m.user_id}>
+                        {m.full_name} ({m.designation}) —{" "}
+                        {
+                          state.cases.filter(
+                            (c) =>
+                              c.status !== "closed" &&
+                              c.status !== "resolved" &&
+                              c.officer_assignments.some(
+                                (o) =>
+                                  o.officer_id === m.user_id &&
+                                  o.status === "active",
+                              ),
+                          ).length
+                        }{" "}
+                        active cases
+                      </option>
+                    ))}
                 </select>
               </label>
               <label>
                 Officer Role
-                <select value={officerRole} onChange={(e) => setOfficerRole(e.target.value as any)}>
+                <select
+                  value={officerRole}
+                  onChange={(e) => setOfficerRole(e.target.value as any)}
+                >
                   <option value="lead_officer">Lead Responsible Officer</option>
                   <option value="supporting">Supporting Officer</option>
                   <option value="reviewer">Reviewer</option>
                 </select>
               </label>
               <label>
-                Assignment Notes
+                Directives &amp; Scope
                 <textarea
                   rows={3}
-                  placeholder="Instructions or scope for officer..."
+                  placeholder="Instructions for the investigation..."
                   value={officerNotes}
                   onChange={(e) => setOfficerNotes(e.target.value)}
                 />
               </label>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
-                <button type="button" className="button button-quiet" onClick={() => setShowAssignOfficerModal(false)}>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => setShowAssignOfficerModal(false)}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="button button-primary" disabled={officerSubmitting}>
-                  {officerSubmitting ? "Assigning..." : "Assign Officer"}
+                <button
+                  type="submit"
+                  className="button button-primary"
+                  disabled={officerSubmitting}
+                >
+                  {officerSubmitting ? "Assigning..." : "Confirm Assignment"}
                 </button>
               </div>
             </form>
@@ -1076,48 +1992,159 @@ export function CaseDetailPage() {
         </div>
       )}
 
-      {/* Case Transfer Modal */}
-      {showTransferModal && (
-        <div style={modalBackdropStyle}>
-          <div className="card" style={modalCardStyle}>
-            <h3>Request Case Transfer</h3>
-            {transferError && <div className="callout callout-danger" style={{ marginBottom: "1rem" }}>{transferError}</div>}
-            <form onSubmit={handleRequestTransfer}>
+      {/* MODAL 5: ASSIGN BUREAU */}
+      {showAssignBureauModal && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setShowAssignBureauModal(false)}
+        >
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Add Collaborating Bureau</h3>
+              <button
+                type="button"
+                className="btn-icon-close"
+                onClick={() => setShowAssignBureauModal(false)}
+              >
+                <IconClose className="w-4 h-4" />
+              </button>
+            </div>
+            {assignError && (
+              <div
+                className="badge badge-priority-critical"
+                style={{ margin: "0.5rem 1.5rem" }}
+              >
+                {assignError}
+              </div>
+            )}
+            <form onSubmit={handleAssignBureau}>
               <label>
-                Destination Bureau
-                <select value={transferToBureauId} onChange={(e) => setTransferToBureauId(e.target.value)} required>
-                  <option value="">-- Choose Target Bureau --</option>
-                  {bureaus?.filter(b => b.id !== caseItem.lead_bureau_id).map((b) => (
+                Bureau
+                <select
+                  value={selectedBureauId}
+                  onChange={(e) => setSelectedBureauId(e.target.value)}
+                  required
+                >
+                  <option value="">-- Choose Bureau --</option>
+                  {state.bureaus.map((b) => (
                     <option key={b.id} value={b.id}>
-                      {b.name} ({b.code})
+                      {b.code}: {b.name}
                     </option>
                   ))}
                 </select>
               </label>
               <label>
-                Transfer Type
-                <select value={transferType} onChange={(e) => setTransferType(e.target.value as any)}>
-                  <option value="handover">Handover (Complete transfer of ownership)</option>
-                  <option value="lead_change">Lead Change (Make target bureau lead)</option>
-                  <option value="reassignment">Reassignment (Workload redistribution)</option>
+                Coordination Rationale
+                <textarea
+                  rows={3}
+                  placeholder="Explain why this bureau's review is required..."
+                  value={assignReason}
+                  onChange={(e) => setAssignReason(e.target.value)}
+                />
+              </label>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => setShowAssignBureauModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="button button-primary"
+                  disabled={assignSubmitting}
+                >
+                  {assignSubmitting ? "Assigning..." : "Assign Bureau"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 6: TRANSFER */}
+      {showTransferModal && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setShowTransferModal(false)}
+        >
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Request Case Transfer</h3>
+              <button
+                type="button"
+                className="btn-icon-close"
+                onClick={() => setShowTransferModal(false)}
+              >
+                <IconClose className="w-4 h-4" />
+              </button>
+            </div>
+            {transferError && (
+              <div
+                className="badge badge-priority-critical"
+                style={{ margin: "0.5rem 1.5rem" }}
+              >
+                {transferError}
+              </div>
+            )}
+            <form onSubmit={handleRequestTransfer}>
+              <label>
+                Destination Bureau
+                <select
+                  value={transferToBureauId}
+                  onChange={(e) => setTransferToBureauId(e.target.value)}
+                  required
+                >
+                  <option value="">-- Choose Target Bureau --</option>
+                  {state.bureaus
+                    .filter((b) => b.id !== caseItem.lead_bureau_id)
+                    .map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.code}: {b.name}
+                      </option>
+                    ))}
                 </select>
               </label>
               <label>
-                Transfer Justification
+                Transfer Type
+                <select
+                  value={transferType}
+                  onChange={(e) => setTransferType(e.target.value as any)}
+                >
+                  <option value="handover">
+                    Handover (Complete transfer of ownership)
+                  </option>
+                  <option value="lead_change">Lead Change</option>
+                  <option value="reassignment">Reassignment</option>
+                </select>
+              </label>
+              <label>
+                Justification
                 <textarea
                   rows={3}
                   required
-                  placeholder="Explain why this case is being transferred..."
+                  placeholder="Explain why this case should be transferred..."
                   value={transferReason}
                   onChange={(e) => setTransferReason(e.target.value)}
                 />
               </label>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
-                <button type="button" className="button button-quiet" onClick={() => setShowTransferModal(false)}>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => setShowTransferModal(false)}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="button button-primary" disabled={transferSubmitting}>
-                  {transferSubmitting ? "Submitting..." : "Submit Transfer"}
+                <button
+                  type="submit"
+                  className="button button-primary"
+                  disabled={transferSubmitting}
+                >
+                  {transferSubmitting
+                    ? "Submitting..."
+                    : "Submit Transfer Request"}
                 </button>
               </div>
             </form>
@@ -1125,74 +2152,74 @@ export function CaseDetailPage() {
         </div>
       )}
 
-      {/* Add Attachment Modal */}
-      {showAttachmentModal && (
-        <div style={modalBackdropStyle}>
-          <div className="card" style={modalCardStyle}>
-            <h3>Attach Case Evidence</h3>
-            {attachError && <div className="callout callout-danger" style={{ marginBottom: "1rem" }}>{attachError}</div>}
-            <form onSubmit={handleUploadAttachment}>
+      {/* MODAL 7: CROSS BUREAU ACCESS REQUEST */}
+      {showAccessModal && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setShowAccessModal(false)}
+        >
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Request Cross-Bureau Access</h3>
+              <button
+                type="button"
+                className="btn-icon-close"
+                onClick={() => setShowAccessModal(false)}
+              >
+                <IconClose className="w-4 h-4" />
+              </button>
+            </div>
+            {accessError && (
+              <div
+                className="badge badge-priority-critical"
+                style={{ margin: "0.5rem 1.5rem" }}
+              >
+                {accessError}
+              </div>
+            )}
+            <form onSubmit={handleRequestAccess}>
               <label>
-                Document Filename
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g., AICTE_Inspection_Report_2026.pdf"
-                  value={attachFilename}
-                  onChange={(e) => setAttachFilename(e.target.value)}
-                />
-              </label>
-              <label>
-                Attachment Classification
-                <select value={attachType} onChange={(e) => setAttachType(e.target.value)}>
-                  <option value="supporting_document">Supporting Document</option>
-                  <option value="evidence">Evidence</option>
-                  <option value="response">Institution Response</option>
-                  <option value="resolution_document">Resolution Document</option>
+                Requested Access Level
+                <select
+                  value={accessLevel}
+                  onChange={(e) => setAccessLevel(e.target.value as any)}
+                >
+                  <option value="details">View Details (Read-only)</option>
+                  <option value="collaborate">
+                    Collaborate (Read and Add Actions/Notes)
+                  </option>
                 </select>
               </label>
               <label>
-                Description (Optional)
-                <input
-                  type="text"
-                  placeholder="Brief note about the contents of this file..."
-                  value={attachDescription}
-                  onChange={(e) => setAttachDescription(e.target.value)}
+                Justification
+                <textarea
+                  rows={3}
+                  required
+                  placeholder="Explain why your bureau requires access to this case..."
+                  value={accessReason}
+                  onChange={(e) => setAccessReason(e.target.value)}
                 />
               </label>
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
-                <button type="button" className="button button-quiet" onClick={() => setShowAttachmentModal(false)}>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => setShowAccessModal(false)}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="button button-primary" disabled={attachSubmitting}>
-                  {attachSubmitting ? "Uploading..." : "Upload & Register"}
+                <button
+                  type="submit"
+                  className="button button-primary"
+                  disabled={accessSubmitting}
+                >
+                  {accessSubmitting ? "Submitting..." : "Submit Access Request"}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
-    </section>
+    </div>
   );
 }
-
-const modalBackdropStyle: React.CSSProperties = {
-  position: "fixed",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  backgroundColor: "rgba(0, 0, 0, 0.5)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 1000,
-  padding: "1rem",
-};
-
-const modalCardStyle: React.CSSProperties = {
-  maxWidth: "540px",
-  width: "100%",
-  maxHeight: "90vh",
-  overflowY: "auto",
-};

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useSimulationRevision } from "../simulation/selectors";
 import { useAuth } from "../auth/AuthProvider";
 import { type ApiError, type QueryParams, toApiError } from "./api";
 import type { Page } from "../types";
@@ -32,10 +33,11 @@ export function usePagedResource<T>(
   params: QueryParams = {},
   options: ResourceOptions = {},
 ): PagedResource<T> {
-  const { api } = useAuth();
+  const { api, activePersona } = useAuth();
+  const revision = useSimulationRevision();
   const enabled = options.enabled ?? true;
   const paramsKey = JSON.stringify(params);
-  const cacheKey = `${path}?${paramsKey}`;
+  const cacheKey = `${activePersona.key}:${path}?${paramsKey}`;
 
   const cached = pagedCache.get(cacheKey);
   const [items, setItems] = useState<T[]>(cached ? (cached.items as T[]) : []);
@@ -136,7 +138,7 @@ export function usePagedResource<T>(
         }
       }
     },
-    [api, enabled, path, paramsKey, cacheKey],
+    [api, enabled, path, paramsKey, cacheKey, revision],
   );
 
   // Background refresh sequenced with setTimeout so requests never race or overlap
@@ -190,18 +192,20 @@ interface Resource<T> {
 
 /** Single resource fetched from a path such as `/institutions/<id>` with realtime background refresh. */
 export function useResource<T>(path: string | null): Resource<T> {
-  const { api } = useAuth();
-  const cached = path ? (resourceCache.get(path) as T | undefined) : undefined;
+  const { api, activePersona } = useAuth();
+  const revision = useSimulationRevision();
+  const cachePath = `${activePersona.key}:${path}`;
+  const cached = path ? (resourceCache.get(cachePath) as T | undefined) : undefined;
 
   const [data, setData] = useState<T | null>(cached ?? null);
   const [loading, setLoading] = useState(Boolean(path) && !cached);
   const [error, setError] = useState<ApiError | null>(null);
 
   // Sync state synchronously if path changes
-  const prevPathRef = useRef(path);
-  if (prevPathRef.current !== path) {
-    prevPathRef.current = path;
-    const hit = path ? (resourceCache.get(path) as T | undefined) : undefined;
+  const prevPathRef = useRef(cachePath);
+  if (prevPathRef.current !== cachePath) {
+    prevPathRef.current = cachePath;
+    const hit = path ? (resourceCache.get(cachePath) as T | undefined) : undefined;
     setData(hit ?? null);
     setLoading(Boolean(path) && !hit);
     setError(null);
@@ -242,7 +246,7 @@ export function useResource<T>(path: string | null): Resource<T> {
         if (currentStr !== newStr) {
           setData(result);
         }
-        resourceCache.set(targetPath, result);
+        resourceCache.set(cachePath, structuredClone(result));
         setError(null);
         return true;
       } catch (raw) {
@@ -259,7 +263,7 @@ export function useResource<T>(path: string | null): Resource<T> {
         }
       }
     },
-    [api, path],
+    [api, path, cachePath, revision],
   );
 
   // Background refresh sequenced with setTimeout so requests never race or overlap

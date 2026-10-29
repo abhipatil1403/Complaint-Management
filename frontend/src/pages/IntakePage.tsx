@@ -1,9 +1,19 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthProvider";
-import { EmptyState, ErrorPanel, Loading, PageHeader, StatusBadge } from "../components/ui";
-import { formatDateTime, intakeStatusLabel, languageLabel } from "../lib/intake";
+import {
+  EmptyState,
+  ErrorPanel,
+  Loading,
+  PageHeader,
+  StatusBadge,
+} from "../components/ui";
+import {
+  formatDateTime,
+  intakeStatusLabel,
+  languageLabel,
+} from "../lib/intake";
 import { usePagedResource } from "../lib/useResource";
 import type { SubmissionSummary } from "../types";
 import { PermissionDeniedPage } from "./PermissionDeniedPage";
@@ -19,18 +29,21 @@ const STATUSES = [
 
 export function IntakePage() {
   const { has } = useAuth();
+  const [params] = useSearchParams();
   const [status, setStatus] = useState("");
   const [language, setLanguage] = useState("");
   const [channel, setChannel] = useState("");
-  const { items, loading, error, hasMore, reload, loadMore } = usePagedResource<SubmissionSummary>(
-    "/submissions",
-    {
-      intake_status: status || undefined,
-      language: language || undefined,
-      channel_code: channel || undefined,
-    },
-    { enabled: has("submission.view") },
-  );
+  const { items, loading, error, hasMore, reload, loadMore } =
+    usePagedResource<SubmissionSummary>(
+      "/submissions",
+      {
+        intake_status: status || undefined,
+        ready_only: params.get("ready") === "true" ? true : undefined,
+        language: language || undefined,
+        channel_code: channel || undefined,
+      },
+      { enabled: has("submission.view") },
+    );
 
   if (!has("submission.view")) {
     return <PermissionDeniedPage />;
@@ -40,25 +53,27 @@ export function IntakePage() {
     <section>
       <PageHeader
         title="Intake queue"
-        description="Preserved submissions from the simulated AICTE and CPGRAMS portals. Complaint bodies are only shown on the detail page."
+        description="Preserved original submissions, institution checks, and case associations."
         actions={
-          <button type="button" className="button button-quiet" onClick={() => void reload()}>
+          <button
+            type="button"
+            className="button button-quiet"
+            onClick={() => void reload()}
+          >
             Refresh
           </button>
         }
       />
-
-      <div className="callout callout-warning">
-        <strong>Simulated intake only.</strong> These records never reached AICTE or CPGRAMS. No
-        institution verification, duplicate review, case creation or SLA timer has run.
-      </div>
 
       <div className="card">
         <div className="toolbar toolbar-wrap">
           <h2>Submissions</h2>
           <label>
             Intake status
-            <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <select
+              value={status}
+              onChange={(event) => setStatus(event.target.value)}
+            >
               <option value="">All statuses</option>
               {STATUSES.map((value) => (
                 <option key={value} value={value}>
@@ -69,7 +84,10 @@ export function IntakePage() {
           </label>
           <label>
             Language
-            <select value={language} onChange={(event) => setLanguage(event.target.value)}>
+            <select
+              value={language}
+              onChange={(event) => setLanguage(event.target.value)}
+            >
               <option value="">All languages</option>
               <option value="en">English</option>
               <option value="hi">Hindi</option>
@@ -77,10 +95,13 @@ export function IntakePage() {
           </label>
           <label>
             Channel
-            <select value={channel} onChange={(event) => setChannel(event.target.value)}>
+            <select
+              value={channel}
+              onChange={(event) => setChannel(event.target.value)}
+            >
               <option value="">All channels</option>
-              <option value="AICTE_SIM">AICTE (simulated)</option>
-              <option value="CPGRAMS_SIM">CPGRAMS (simulated)</option>
+              <option value="aicte_portal">AICTE Portal</option>
+              <option value="cpgrams">CPGRAMS Portal</option>
             </select>
           </label>
         </div>
@@ -90,7 +111,7 @@ export function IntakePage() {
         {!loading && !error && items.length === 0 ? (
           <EmptyState
             title="No submissions yet"
-            description="Use a simulated portal to record the first demonstration submission."
+            description="Submit a complaint through the public intake portal to record a submission."
           />
         ) : null}
 
@@ -113,16 +134,16 @@ export function IntakePage() {
                   <tr key={submission.id}>
                     <td className="mono">
                       <Link to={`/intake/${submission.id}`}>
-                        {submission.external_reference ?? submission.id.slice(0, 8)}
+                        {submission.external_reference ??
+                          submission.id.slice(0, 8)}
                       </Link>
                     </td>
                     <td>{formatDateTime(submission.received_at)}</td>
+                    <td> {submission.channel.code}</td>
                     <td>
-                      <span className="badge badge-simulated">Simulated</span>{" "}
-                      {submission.channel.code}
-                    </td>
-                    <td>
-                      <Link to={`/intake/${submission.id}`}>{submission.subject}</Link>
+                      <Link to={`/intake/${submission.id}`}>
+                        {submission.subject}
+                      </Link>
                     </td>
                     <td className="muted">
                       {submission.institution?.official_name ??

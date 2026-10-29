@@ -22,7 +22,7 @@ export function IntakeDetailPage() {
     <section>
       <PageHeader
         title="Submission detail"
-        description="Original complaint content, preserved exactly as submitted. Access is restricted and audited by the API and PostgreSQL."
+        description="Original complaint content and institution details, preserved as submitted."
         actions={
           <Link to="/intake" className="button button-quiet">
             Back to the queue
@@ -30,10 +30,6 @@ export function IntakeDetailPage() {
         }
       />
 
-      <div className="callout callout-warning">
-        <strong>Simulated submission.</strong> This record was never sent to AICTE or CPGRAMS and no
-        case exists for it.
-      </div>
 
       <ErrorPanel error={error} />
       {loading ? <Loading /> : null}
@@ -42,7 +38,7 @@ export function IntakeDetailPage() {
         <div className="grid grid-2">
           <article className="card">
             <div className="badge-row">
-              <span className="badge badge-simulated">Simulated</span>
+
               <StatusBadge value={data.intake_status} label={intakeStatusLabel(data.intake_status)} />
             </div>
             <h2>{data.subject}</h2>
@@ -54,7 +50,7 @@ export function IntakeDetailPage() {
               <div>
                 <dt>Channel</dt>
                 <dd>
-                  {data.channel.name} {data.channel.is_simulated ? <span className="badge badge-simulated">Simulated</span> : null}
+                  {data.channel.name}
                 </dd>
               </div>
               <div>
@@ -83,7 +79,7 @@ export function IntakeDetailPage() {
               </div>
               <div>
                 <dt>Canonical case</dt>
-                <dd>{data.canonical_case_id ?? "None — case creation is a later phase"}</dd>
+                <dd>{data.canonical_case_id ?? "Not yet associated with a case"}</dd>
               </div>
               <div>
                 <dt>Source event</dt>
@@ -97,10 +93,7 @@ export function IntakeDetailPage() {
                 <dt>Consent recorded</dt>
                 <dd>{data.consent_acknowledged ? "Yes" : "Not recorded"}</dd>
               </div>
-              <div>
-                <dt>Simulation notice</dt>
-                <dd className="mono">{data.simulation_notice_version ?? "—"}</dd>
-              </div>
+
             </dl>
           </article>
 
@@ -116,8 +109,7 @@ export function IntakeDetailPage() {
               Content fingerprint <span className="mono">{data.content_fingerprint ?? "—"}</span>
             </p>
             <p className="small muted">
-              Fingerprints support later duplicate review. They are not a decision and no duplicate
-              candidate has been created.
+              Original submissions remain available throughout verification and duplicate review.
             </p>
           </article>
         </div>

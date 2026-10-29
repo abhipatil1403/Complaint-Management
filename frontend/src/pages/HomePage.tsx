@@ -1,264 +1,354 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-
+import { IconCircleArrow, IconDownload, IconPlus } from "../components/Icons";
 import { useAuth } from "../auth/AuthProvider";
-import { PageHeader, StatusBadge } from "../components/ui";
-import { formatResource, groupPermissionsByResource, membershipName } from "../lib/access";
-
-const PHASE_NOTES = [
-  "Identity comes from Supabase Auth; there is no separate password system.",
-  "Capabilities are resolved from role grants and re-checked by FastAPI and PostgreSQL.",
-  "Reference data is deactivated rather than deleted so history stays intact.",
-  "Bureau-scoped capabilities only apply while that bureau is the active context.",
-  "Phase 2.1 intake preserves the original subject, text and language exactly as submitted.",
-  "Only the dedicated intake database role can create a submission; browsers cannot.",
-];
+import {
+  canReadCase,
+  exportCsv,
+  isResolved,
+  reporting,
+  useSimulation,
+} from "../simulation/selectors";
+import { scopedState } from "../simulation/scope";
+import { ThroughputChart } from "../components/ThroughputChart";
 
 export function HomePage() {
-  const { me, isSuperAdmin, has } = useAuth();
-
-  if (!me) {
-    return null;
-  }
-
-  const activeBureau = membershipName(me, me.active_bureau_id);
-  const capabilities = groupPermissionsByResource(me.permissions);
-  const globalCapabilities = groupPermissionsByResource(me.global_permissions);
-
-  const shortcuts = [
+  const [days, setDays] = useState(30);
+  const rawState = useSimulation();
+  const { has, activePersona } = useAuth();
+  const state = scopedState(rawState, activePersona);
+  const metrics = reporting(state);
+  const period = reporting(state, days);
+  const pendingVerification = state.verificationTasks.filter(
+    (t) => t.verification_status === "pending",
+  ).length;
+  const pendingDuplicates = state.duplicateCandidates.filter(
+    (t) => t.review_status === "pending",
+  ).length;
+  const escalations = state.escalations.filter(
+    (e) =>
+      e.status === "active" &&
+      state.cases.some((c) => c.case_id === e.case_id && !isResolved(c)),
+  );
+  const cards = [
     {
-      to: "/intake",
-      title: "Intake queue",
-      description: "Review preserved submissions from the simulated portals.",
-      visible: has("submission.view"),
+      label: "Total Complaints Received",
+      value: state.submissions.length,
+      caption: `${state.cases.length} canonical cases · original submissions retained`,
+      path: has("submission.view") ? "/intake" : "/analytics",
     },
     {
-      to: "/institutions",
-      title: "Institutions",
-      description: "Search master data, aliases and verification evidence.",
-      visible: has("institution.view"),
+      label: "Active Cases",
+      value: metrics.active.length,
+      caption: `${metrics.resolved.length} resolved or closed`,
+      path: "/cases?scope=active",
     },
     {
-      to: "/bureaus",
-      title: "Bureaus",
-      description: "Review bureau structure and active memberships.",
-      visible: has("bureau.view"),
+      label: "Verification & Duplicate Review",
+      value: pendingVerification + pendingDuplicates,
+      caption: `${pendingVerification} verification · ${pendingDuplicates} duplicate reviews`,
+      path: has("institution.verify")
+        ? "/verification"
+        : has("duplicate.review")
+          ? "/duplicate-review"
+          : "/analytics",
     },
     {
-      to: "/regions",
-      title: "Regions",
-      description: "Maintain the reference list used to group institutions.",
-      visible: has("region.view"),
+      label: "SLA Compliance",
+      value: metrics.rate === null ? "—" : `${metrics.rate}%`,
+      caption: `${metrics.overdue.length} overdue · assessed against configured targets`,
+      path: "/analytics",
     },
-    {
-      to: "/administration",
-      title: "Administration",
-      description: "Review authorized users, role grants and the role catalogue.",
-      visible: has("user.view") || has("role.view"),
-    },
-  ].filter((item) => item.visible);
-
+  ];
   return (
-    <section>
-      <PageHeader
-        title={`Welcome, ${me.user.display_name || me.user.full_name}`}
-        description="Phase 2.1 adds simulated complaint intake and submission preservation. Case, duplicate and SLA workflows arrive in later phases."
-      />
-
-      <div className="grid grid-3">
-        <article className="card">
-          <h2>Identity</h2>
-          <dl className="detail-list">
-            <div>
-              <dt>Official email</dt>
-              <dd>{me.user.official_email}</dd>
-            </div>
-            <div>
-              <dt>Designation</dt>
-              <dd>{me.user.designation ?? "—"}</dd>
-            </div>
-            <div>
-              <dt>Employee code</dt>
-              <dd>{me.user.employee_code ?? "—"}</dd>
-            </div>
-            <div>
-              <dt>Account status</dt>
-              <dd>
-                <StatusBadge value={me.user.account_status} />
-              </dd>
-            </div>
-          </dl>
-          <p className="muted small">
-            {me.is_super_admin
-              ? "This account holds the global Super Admin role. It does not bypass restricted case content."
-              : "Access is limited to the capabilities granted by the roles below."}
-          </p>
-        </article>
-
-        <article className="card">
-          <h2>Roles and scope</h2>
-          {me.roles.length === 0 ? (
-            <p className="muted">No active role grant. Reference data and cases stay hidden.</p>
-          ) : (
-            <ul className="stack">
-              {me.roles.map((role) => (
-                <li key={`${role.role_code}-${role.bureau_id ?? "global"}`} className="stack-item">
-                  <div>
-                    <strong>{role.role_name}</strong>
-                    <div className="muted small mono">{role.role_code}</div>
-                  </div>
-                  <div className="stack-meta">
-                    <StatusBadge value={role.scope_type} />
-                    <span className="muted small">
-                      {role.scope_type === "global"
-                        ? "Organisation-wide"
-                        : role.bureau_name ?? "Bureau"}
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-          {isSuperAdmin ? (
-            <p className="muted small">is_super_admin is derived from the global SUPER_ADMIN role.</p>
-          ) : null}
-        </article>
-
-        <article className="card">
-          <h2>Bureau context</h2>
-          {me.memberships.length === 0 ? (
-            <p className="muted">
-              No bureau membership. Only global capabilities apply to this account.
-            </p>
-          ) : (
-            <>
-              <p>
-                Active context: <strong>{activeBureau ?? "None selected"}</strong>
-              </p>
-              <ul className="stack">
-                {me.memberships.map((membership) => (
-                  <li key={membership.bureau_id} className="stack-item">
-                    <div>
-                      <strong>
-                        {membership.bureau_code} — {membership.bureau_name}
-                      </strong>
-                      <div className="muted small">
-                        {membership.membership_type}
-                        {membership.is_primary ? " · primary" : ""}
-                      </div>
-                    </div>
-                    {me.active_bureau_id === membership.bureau_id ? (
-                      <StatusBadge value="active" label="in context" />
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-              <p className="muted small">
-                Use the bureau switcher in the header. The API validates the membership and
-                PostgreSQL applies only that bureau's grants.
-              </p>
-            </>
-          )}
-        </article>
+    <div>
+      <div className="page-header">
+        <div className="page-header-info">
+          <div className="eyebrow">YOUR WORKSPACE AT A GLANCE</div>
+          <h1>System overview</h1>
+          <p>Every complaint, every action, one clear view.</p>
+        </div>
+        <div className="page-header-actions">
+          <button
+            className="button button-secondary"
+            onClick={() =>
+              exportCsv("OneDesk-dashboard.csv", [
+                ["Metric", "Value"],
+                ...cards.map((c) => [c.label, c.value]),
+              ])
+            }
+          >
+            <IconDownload /> Export summary
+          </button>
+          <Link className="button button-primary" to="/demo/aicte">
+            <IconPlus /> New complaint
+          </Link>
+        </div>
       </div>
-
-      {shortcuts.length > 0 ? (
-        <div className="section">
-          <h2>Available in this phase</h2>
-          <div className="grid grid-4">
-            {shortcuts.map((shortcut) => (
-              <Link key={shortcut.to} to={shortcut.to} className="card link-card">
-                <strong>{shortcut.title}</strong>
-                <span className="muted small">{shortcut.description}</span>
+      <div className="workspace-shortcuts">
+        {has("institution.verify") && (
+          <Link to="/workspaces/verification">
+            Institution verification desk →
+          </Link>
+        )}
+        {has("duplicate.review") && (
+          <Link to="/workspaces/duplicate-review">Duplicate review desk →</Link>
+        )}
+        {has("case.access.manage") && (
+          <Link to="/decisions">Pending access decisions →</Link>
+        )}
+        {has("escalation.manage") && (
+          <Link to="/escalations">Escalation oversight →</Link>
+        )}
+      </div>
+      <div className="stats-grid-4">
+        {cards.map((c, i) => (
+          <Link
+            key={c.label}
+            to={c.path}
+            className={`stat-card ${i === 0 ? "stat-card-hero" : ""}`}
+          >
+            <div className="stat-card-top">
+              <span className="stat-label">{c.label}</span>
+              <IconCircleArrow />
+            </div>
+            <div className="stat-value">{c.value}</div>
+            <div className="stat-trend-pill">{c.caption}</div>
+          </Link>
+        ))}
+      </div>
+      <div className="dashboard-split-grid">
+        <section className="card">
+          <div className="card-header-row">
+            <div>
+              <h2>Intake & resolution</h2>
+              <p className="small muted">
+                Received submissions and completed cases over the last {days}{" "}
+                days.
+              </p>
+            </div>
+            <div className="pill-tabs">
+              {[7, 30, 90].map((d) => (
+                <button
+                  key={d}
+                  aria-pressed={days === d}
+                  className={`pill-tab ${days === d ? "active" : ""}`}
+                  onClick={() => setDays(d)}
+                >
+                  {d}D
+                </button>
+              ))}
+            </div>
+          </div>
+          <ThroughputChart buckets={period.buckets} />
+          <div className="chart-summary">
+            <strong>{period.submissions.length}</strong> received <span>•</span>
+            <strong>
+              {period.buckets.reduce((n, b) => n + b.resolved, 0)}
+            </strong>{" "}
+            resolved
+          </div>
+        </section>
+        <section className="card">
+          <div className="card-header-row">
+            <h2>Priority escalations</h2>
+            <span className="badge badge-priority-critical">
+              {escalations.length} active
+            </span>
+          </div>
+          <div className="stack">
+            {escalations.slice(0, 3).map((e) => (
+              <Link
+                className="escalation-item"
+                key={e.escalation_id}
+                to={`/cases/${e.case_id}`}
+              >
+                <div className="toolbar">
+                  <strong>{e.case_number}</strong>
+                  <span className="badge badge-priority-critical">
+                    {e.level_name}
+                  </span>
+                </div>
+                <p>
+                  {state.cases.some(
+                    (c) =>
+                      c.case_id === e.case_id &&
+                      canReadCase(c, activePersona, state),
+                  )
+                    ? e.case_title
+                    : "Restricted case · request access to view"}
+                </p>
+                <small>
+                  {Math.max(
+                    1,
+                    Math.ceil(
+                      (Date.parse(state.simulatedClock) -
+                        Date.parse(
+                          state.cases.find((c) => c.case_id === e.case_id)!
+                            .target_resolution_date,
+                        )) /
+                        86400000,
+                    ),
+                  )}{" "}
+                  days overdue <span aria-hidden="true">↗</span>
+                </small>
               </Link>
             ))}
+            {!escalations.length && (
+              <p className="empty-state">No active escalations.</p>
+            )}
           </div>
-        </div>
-      ) : null}
-
-      <div className="grid grid-2 section">
-        <article className="card">
-          <h2>Capabilities in the active context</h2>
-          {capabilities.length === 0 ? (
-            <p className="muted">No capability is granted in this context.</p>
-          ) : (
-            <table className="compact-table">
-              <thead>
-                <tr>
-                  <th>Resource</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {capabilities.map((group) => (
-                  <tr key={group.resource}>
-                    <td>{formatResource(group.resource)}</td>
-                    <td className="mono small">{group.actions.join(", ")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          <p className="muted small">
-            Effective list for {activeBureau ?? "the global context"}. Switching bureau reloads
-            this list from the API.
-          </p>
-        </article>
-
-        <article className="card">
-          <h2>Global capabilities</h2>
-          {globalCapabilities.length === 0 ? (
-            <p className="muted">No organisation-wide capability.</p>
-          ) : (
-            <ul className="tag-list">
-              {globalCapabilities.map((group) => (
-                <li key={group.resource} className="tag">
-                  <span>{formatResource(group.resource)}</span>
-                  <span className="mono small">{group.actions.join(", ")}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="muted small">
-            Administration routes require a global capability. A bureau-scoped grant never enables
-            user or role administration.
-          </p>
-        </article>
+          <Link className="text-link" to="/cases?scope=overdue">
+            Review overdue cases →
+          </Link>
+        </section>
       </div>
-
-      <article className="card section">
-        <h2>Simulated intake</h2>
-        <p>
-          Two demonstration portals feed the intake queue. Neither is connected to AICTE or CPGRAMS,
-          and no submission leaves this project.
-        </p>
-        <div className="link-row">
-          <Link to="/demo/aicte" className="button button-quiet">
-            AICTE demo portal
+      <div className="dashboard-split-grid">
+        <section className="card">
+          <div className="card-header-row">
+            <div>
+              <h2>Bureau & officer workload</h2>
+              <p className="small muted">Active assignments across the team.</p>
+            </div>
+            {has("bureau.view") && (
+              <Link className="button button-secondary" to="/bureaus">
+                View directory
+              </Link>
+            )}
+          </div>
+          <div className="workload-list">
+            {state.bureauMembers
+              .filter((m) => m.is_active)
+              .slice(0, 5)
+              .map((m, i) => {
+                const count = state.cases.filter(
+                  (c) =>
+                    !isResolved(c) &&
+                    c.officer_assignments.some(
+                      (o) =>
+                        o.officer_id === m.user_id && o.status === "active",
+                    ),
+                ).length;
+                return (
+                  <Link
+                    className="workload-row"
+                    key={m.id}
+                    to={`/cases?officer=${m.user_id}`}
+                  >
+                    <span className={`officer-avatar avatar-tone-${i % 4}`}>
+                      {m.full_name
+                        .split(" ")
+                        .map((n) => n[0])
+                        .slice(0, 2)
+                        .join("")}
+                    </span>
+                    <div className="workload-text">
+                      <strong>{m.full_name}</strong>
+                      <small>
+                        {m.designation} ·{" "}
+                        {state.bureaus.find((b) => b.id === m.bureau_id)?.code}
+                      </small>
+                    </div>
+                    <div className="workload-bar-wrap">
+                      <div
+                        className="workload-bar-fill"
+                        style={{
+                          width: `${metrics.active.length ? (count / metrics.active.length) * 100 : 0}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="small">{count} active</span>
+                  </Link>
+                );
+              })}
+          </div>
+          <p className="small muted">
+            Bars show share of active cases. Officer capacity limits have not
+            been configured.
+          </p>
+        </section>
+        <section className="card gauge-meter-card">
+          <h2>Resolution performance</h2>
+          <p className="small muted">
+            Completed cases as a share of all canonical cases.
+          </p>
+          <div className="gauge-svg-wrap">
+            <svg
+              viewBox="0 0 100 58"
+              role="img"
+              aria-label={`${metrics.resolved.length} of ${metrics.cases.length} cases completed`}
+            >
+              <path
+                d="M 10 50 A 40 40 0 0 1 90 50"
+                fill="none"
+                stroke="#e8eeea"
+                strokeWidth="11"
+                strokeLinecap="round"
+              />
+              <path
+                d="M 10 50 A 40 40 0 0 1 90 50"
+                fill="none"
+                stroke="#155a37"
+                strokeWidth="11"
+                strokeLinecap="round"
+                pathLength="100"
+                strokeDasharray="100"
+                strokeDashoffset={
+                  100 -
+                  (metrics.cases.length
+                    ? (metrics.resolved.length / metrics.cases.length) * 100
+                    : 0)
+                }
+              />
+            </svg>
+            <div className="gauge-pct-text">
+              {metrics.cases.length
+                ? Math.round(
+                    (metrics.resolved.length / metrics.cases.length) * 100,
+                  )
+                : 0}
+              %
+            </div>
+          </div>
+          <div className="gauge-caption">
+            {metrics.resolved.length} completed · {metrics.active.length} active
+          </div>
+          <Link className="text-link" to="/analytics">
+            Explore performance →
           </Link>
-          <Link to="/demo/cpgrams" className="button button-quiet">
-            CPGRAMS demo portal
+        </section>
+      </div>
+      <section className="card">
+        <div className="card-header-row">
+          <h2>Recent case activity</h2>
+          <Link to="/cases" className="text-link">
+            Open workspace →
           </Link>
         </div>
-        <p className="muted small">
-          Submissions wait in <strong>awaiting institution verification</strong> or{" "}
-          <strong>awaiting duplicate review</strong>. No case is created automatically and no
-          duplicate is merged.
-        </p>
-      </article>
-
-      <article className="card section">
-        <h2>Scope of this build</h2>
-        <ul className="check-list">
-          {PHASE_NOTES.map((note) => (
-            <li key={note}>{note}</li>
-          ))}
-        </ul>
-        <p className="muted small">
-          Demonstration only. Every seeded record is illustrative and no real complaint is filed or
-          tracked. Later phases add institution verification, duplicate review, cases, assignments
-          and SLA tracking.
-        </p>
-      </article>
-    </section>
+        <div className="activity-list">
+          {state.cases
+            .filter((c) => canReadCase(c, activePersona, state))
+            .flatMap((c) =>
+              c.action_history.map((a) => ({
+                ...a,
+                case_id: c.case_id,
+                case_number: c.case_number,
+              })),
+            )
+            .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+            .slice(0, 4)
+            .map((a, i) => (
+              <Link key={`${a.action_id}-${i}`} to={`/cases/${a.case_id}`}>
+                <span className="activity-dot" />
+                <div>
+                  <strong>{a.case_number}</strong>
+                  <p>{a.action_description}</p>
+                </div>
+                <small>{a.actor_name}</small>
+              </Link>
+            ))}
+        </div>
+      </section>
+    </div>
   );
 }

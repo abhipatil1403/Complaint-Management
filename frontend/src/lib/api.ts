@@ -5,6 +5,13 @@
  * when one is active. The API and PostgreSQL both re-check authorization.
  */
 
+import { handleSimulatedRequest } from "../simulation/apiHandler";
+
+export const IS_PROTOTYPE_MODE =
+  import.meta.env.VITE_APP_MODE === "prototype" ||
+  !import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.MODE !== "production";
+
 export interface ApiErrorDetail {
   field?: string;
   issue?: string;
@@ -60,6 +67,7 @@ export interface ApiClientOptions {
   baseUrl: string;
   getAccessToken: () => Promise<string | null>;
   getActiveBureau: () => string | null;
+  simulate?: boolean;
 }
 
 function buildQuery(params?: QueryParams): string {
@@ -81,11 +89,13 @@ export class ApiClient {
   private readonly baseUrl: string;
   private readonly getAccessToken: () => Promise<string | null>;
   private readonly getActiveBureau: () => string | null;
+  private readonly simulate: boolean;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.getAccessToken = options.getAccessToken;
     this.getActiveBureau = options.getActiveBureau;
+    this.simulate = options.simulate ?? (import.meta.env.MODE !== "test" && IS_PROTOTYPE_MODE);
   }
 
   get<T>(path: string, params?: QueryParams, bureauId?: string | null): Promise<T> {
@@ -105,6 +115,21 @@ export class ApiClient {
   }
 
   private async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+    if (this.simulate) {
+      try {
+        const bureau = options.bureauId === undefined ? this.getActiveBureau() : options.bureauId;
+        const simulatedResult = await handleSimulatedRequest<T>({
+          method: options.method ?? "GET",
+          path,
+          body: options.body,
+          bureauId: bureau,
+        });
+        return structuredClone(simulatedResult);
+      } catch (simErr: any) {
+        throw new ApiError(400, "SIMULATION_ERROR", simErr?.message || "Simulation error");
+      }
+    }
+
     const token = await this.getAccessToken();
     if (!token) {
       throw new ApiError(401, "MISSING_TOKEN", "Please sign in to continue.");
@@ -188,9 +213,11 @@ export interface PublicRequestOptions {
  */
 export class PublicApiClient {
   private readonly baseUrl: string;
+  private readonly simulate: boolean;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, simulate?: boolean) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.simulate = simulate ?? (import.meta.env.MODE !== "test" && IS_PROTOTYPE_MODE);
   }
 
   get<T>(path: string, params?: QueryParams): Promise<T> {
@@ -202,6 +229,19 @@ export class PublicApiClient {
   }
 
   private async request<T>(path: string, options: PublicRequestOptions = {}): Promise<T> {
+    if (this.simulate) {
+      try {
+        const simulatedResult = await handleSimulatedRequest<T>({
+          method: options.method ?? "GET",
+          path,
+          body: options.body,
+        });
+        return structuredClone(simulatedResult);
+      } catch (simErr: any) {
+        throw new ApiError(400, "SIMULATION_ERROR", simErr?.message || "Simulation error");
+      }
+    }
+
     const headers: Record<string, string> = {
       Accept: "application/json",
       ...(options.headers ?? {}),

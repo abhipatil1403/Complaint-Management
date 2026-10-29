@@ -7,7 +7,7 @@ import { useAuth } from "../auth/AuthProvider";
  */
 export function BureauSwitcher() {
   const { me, selectBureau } = useAuth();
-  if (!me || me.memberships.length === 0) {
+  if (!me || me.memberships.length < 2) {
     return null;
   }
 
