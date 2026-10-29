@@ -1508,6 +1508,30 @@ button {
   color: var(--color-purple);
 }
 
+/* AI Gradient Title Animation */
+@keyframes aiGradientShimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.ai-gradient-title {
+  background: linear-gradient(90deg, #155a37 0%, #059669 30%, #10b981 50%, #047857 70%, #155a37 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+  animation: aiGradientShimmer 5s ease infinite;
+}
+
 .badge-status-resolved {
   background: var(--color-success-soft);
   color: var(--color-success);

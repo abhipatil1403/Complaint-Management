@@ -9,8 +9,12 @@
 
 import type { SimCase, SimSubmission } from "../simulation/types";
 
-const GEMINI_MODEL = "gemini-2.0-flash";
-const GEMINI_FALLBACK_MODEL = "gemini-1.5-flash";
+const CANDIDATE_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-2.5-flash",
+  "gemini-flash-latest",
+  "gemini-2.0-flash",
+];
 
 export interface GeminiAnalysisResult {
   synopsis: string;
@@ -23,6 +27,19 @@ export interface GeminiAnalysisResult {
   overlap_action?: string;
   isLiveGemini: boolean;
   modelUsed: string;
+}
+
+/**
+ * Clean potential markdown fencing from JSON string.
+ */
+function cleanJsonText(raw: string): string {
+  let cleaned = raw.trim();
+  if (cleaned.startsWith("```json")) {
+    cleaned = cleaned.replace(/^```json\s*/i, "").replace(/\s*```$/, "");
+  } else if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```\s*/, "").replace(/\s*```$/, "");
+  }
+  return cleaned.trim();
 }
 
 /**
@@ -40,7 +57,7 @@ export function hasGeminiApiKey(): boolean {
 }
 
 /**
- * Generate intelligent deterministic triage if no Gemini key is present in .env.
+ * Generate intelligent deterministic triage if no Gemini key is present in .env or on failure.
  */
 function generateDynamicFallback(
   caseItem: SimCase,
@@ -183,7 +200,6 @@ Return your response ONLY as valid, raw JSON matching this schema:
 `;
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
     const payload = {
       contents: [
         {
@@ -197,34 +213,43 @@ Return your response ONLY as valid, raw JSON matching this schema:
       },
     };
 
-    let response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    let data: any = null;
+    let successfulModel = "gemini-3.8-flash";
 
-    // If Gemini 2.0 Flash is unavailable, attempt fallback to Gemini 1.5 Flash
-    if (!response.ok && response.status === 404) {
-      const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_FALLBACK_MODEL}:generateContent?key=${apiKey}`;
-      response = await fetch(fallbackUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+    for (const model of CANDIDATE_MODELS) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (response.ok) {
+          data = await response.json();
+          successfulModel = model;
+          break;
+        } else {
+          console.warn(`Model ${model} returned HTTP ${response.status}`);
+        }
+      } catch (err) {
+        console.warn(`Fetch error with model ${model}:`, err);
+      }
     }
 
-    if (!response.ok) {
-      console.warn("Gemini API call failed with status", response.status);
+    if (!data) {
+      console.warn("All candidate Gemini models failed, falling back to dynamic engine.");
       return generateDynamicFallback(caseItem, overlappingCases);
     }
 
-    const data = await response.json();
     const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!rawText) {
       return generateDynamicFallback(caseItem, overlappingCases);
     }
 
-    const parsed = JSON.parse(rawText);
+    const cleaned = cleanJsonText(rawText);
+    const parsed = JSON.parse(cleaned);
+
     return {
       synopsis: parsed.synopsis || "Statutory analysis completed successfully.",
       statutory_clauses: Array.isArray(parsed.statutory_clauses)
@@ -237,11 +262,11 @@ Return your response ONLY as valid, raw JSON matching this schema:
         ? parsed.priority
         : "medium",
       urgency_rating: parsed.urgency_rating || "High Urgency",
-      confidence_score: typeof parsed.confidence_score === "number" ? parsed.confidence_score : 95,
+      confidence_score: typeof parsed.confidence_score === "number" ? parsed.confidence_score : 96,
       suggested_action: parsed.suggested_action || "Issue standard inquiry notice.",
       overlap_action: parsed.overlap_action || undefined,
       isLiveGemini: true,
-      modelUsed: `Google Gemini 2.0 Flash (Live)`,
+      modelUsed: successfulModel === "gemini-3.8-flash" ? "Google Gemini 3.8 Flash (Live)" : `Google ${successfulModel} (Live)`,
     };
   } catch (err) {
     console.warn("Error running live Gemini triage, falling back to dynamic engine:", err);

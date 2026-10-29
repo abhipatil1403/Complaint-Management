@@ -17,7 +17,6 @@ import {
 } from "../lib/gemini";
 import {
   IconAlertTriangle,
-  IconBot,
   IconCheck,
   IconClock,
   IconClose,
@@ -1064,29 +1063,20 @@ export function CaseDetailPage() {
                 gap: "0.5rem",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                <div
+              <div>
+                <h3
+                  className="ai-gradient-title"
                   style={{
-                    width: "32px",
-                    height: "32px",
-                    borderRadius: "var(--radius-md)",
-                    background: "#dcfce7",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
+                    margin: 0,
+                    fontSize: "1.18rem",
+                    fontWeight: 800,
                   }}
                 >
-                  <IconBot className="w-5 h-5" style={{ color: "#166534" }} />
-                </div>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "1.05rem", color: "#166534" }}>
-                    AI Case Triage &amp; Regulatory Synopsis
-                  </h3>
-                  <p className="small muted" style={{ margin: "0.15rem 0 0 0" }}>
-                    Smart NLP entity extraction, rule-based cross-referencing, and inter-bureau coordination assistance.
-                  </p>
-                </div>
+                  AI Case Triage &amp; Regulatory Synopsis
+                </h3>
+                <p className="small muted" style={{ margin: "0.2rem 0 0 0" }}>
+                  Smart NLP entity extraction, rule-based cross-referencing, and inter-bureau coordination assistance.
+                </p>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                 <span
