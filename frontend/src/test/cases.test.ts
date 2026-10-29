@@ -53,4 +53,28 @@ describe("Cases helpers (Phase 3 & 4)", () => {
     expect(formatFileSize(2048)).toBe("2.0 KB");
     expect(formatFileSize(1048576 * 2.5)).toBe("2.5 MB");
   });
+
+  it("safely handles partial or undefined array fields on CaseDetail", () => {
+    const partialCase: any = {
+      case_id: "test-id",
+      case_number: "CASE-2026-0001",
+      title: "Test Complaint",
+      status: "new",
+      // Arrays intentionally omitted / undefined as when transitioning from index cache
+      collaborating_bureaus: undefined,
+      action_history: undefined,
+      related_cases: undefined,
+      officer_assignments: undefined,
+    };
+
+    const collaboratingBureaus = partialCase.collaborating_bureaus || [];
+    const actionHistory = partialCase.action_history || [];
+    const relatedCases = partialCase.related_cases || [];
+    const officerAssignments = partialCase.officer_assignments || [];
+
+    expect(collaboratingBureaus.length).toBe(0);
+    expect(actionHistory.length).toBe(0);
+    expect(relatedCases.length).toBe(0);
+    expect(officerAssignments.length).toBe(0);
+  });
 });

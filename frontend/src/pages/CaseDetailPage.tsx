@@ -208,6 +208,10 @@ export function CaseDetailPage() {
 
   // Permitted next status transitions
   const permittedStatuses = VALID_STATUS_TRANSITIONS[caseItem.status] ?? [];
+  const collaboratingBureaus = caseItem.collaborating_bureaus || [];
+  const actionHistory = caseItem.action_history || [];
+  const relatedCases = caseItem.related_cases || [];
+  const officerAssignments = caseItem.officer_assignments || [];
 
   const handleStatusTransition = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -415,14 +419,14 @@ export function CaseDetailPage() {
           className={`button ${activeTab === "assignments" ? "button-primary" : "button-quiet"}`}
           onClick={() => setActiveTab("assignments")}
         >
-          Bureau & Officers ({caseItem.collaborating_bureaus.length + 1})
+          Bureau & Officers ({collaboratingBureaus.length + 1})
         </button>
         <button
           type="button"
           className={`button ${activeTab === "timeline" ? "button-primary" : "button-quiet"}`}
           onClick={() => setActiveTab("timeline")}
         >
-          Timeline & History ({caseItem.action_history.length})
+          Timeline & History ({actionHistory.length})
         </button>
         <button
           type="button"
@@ -477,8 +481,8 @@ export function CaseDetailPage() {
               <dd>{caseItem.lead_bureau_name ? `${caseItem.lead_bureau_name} (${caseItem.lead_bureau_code})` : "Unassigned"}</dd>
               <dt>Collaborating Bureaus</dt>
               <dd>
-                {caseItem.collaborating_bureaus.length > 0
-                  ? caseItem.collaborating_bureaus.map((b) => b.bureau_code).join(", ")
+                {collaboratingBureaus.length > 0
+                  ? collaboratingBureaus.map((b) => b.bureau_code).join(", ")
                   : "None"}
               </dd>
               <dt>Source Submission ID</dt>
@@ -486,7 +490,7 @@ export function CaseDetailPage() {
             </dl>
           </div>
 
-          {caseItem.related_cases.length > 0 && (
+          {relatedCases.length > 0 && (
             <div className="card">
               <h3>Related Cases</h3>
               <table className="table">
@@ -500,7 +504,7 @@ export function CaseDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {caseItem.related_cases.map((rc) => (
+                  {relatedCases.map((rc) => (
                     <tr key={rc.relationship_id}>
                       <td><strong>{rc.related_case_number}</strong></td>
                       <td>{rc.related_case_title}</td>
@@ -558,7 +562,7 @@ export function CaseDetailPage() {
                     <td><StatusBadge value="success" label="Active" /></td>
                     <td>{formatDateTime(caseItem.opened_at)}</td>
                     <td>
-                      {caseItem.officer_assignments?.filter(o => o.bureau_name === caseItem.lead_bureau_name).map(o => (
+                      {officerAssignments.filter(o => o.bureau_name === caseItem.lead_bureau_name).map(o => (
                         <div key={o.officer_assignment_id} style={{ fontSize: "0.85rem" }}>
                           <strong>{o.officer_name}</strong> ({o.role.replace(/_/g, " ")})
                         </div>
@@ -582,7 +586,7 @@ export function CaseDetailPage() {
                   </tr>
                 )}
 
-                {caseItem.collaborating_bureaus.map((cb) => (
+                {collaboratingBureaus.map((cb) => (
                   <tr key={cb.bureau_id}>
                     <td>
                       <strong>{cb.bureau_name}</strong> ({cb.bureau_code})
@@ -591,7 +595,7 @@ export function CaseDetailPage() {
                     <td><StatusBadge value="success" label={cb.assignment_status} /></td>
                     <td>{formatDateTime(cb.assigned_at)}</td>
                     <td>
-                      {caseItem.officer_assignments?.filter(o => o.bureau_name === cb.bureau_name).map(o => (
+                      {officerAssignments.filter(o => o.bureau_name === cb.bureau_name).map(o => (
                         <div key={o.officer_assignment_id} style={{ fontSize: "0.85rem" }}>
                           <strong>{o.officer_name}</strong> ({o.role.replace(/_/g, " ")})
                         </div>
@@ -628,11 +632,11 @@ export function CaseDetailPage() {
             <span className="hint">Immutable append-only chronological log</span>
           </div>
 
-          {caseItem.action_history.length === 0 ? (
+          {actionHistory.length === 0 ? (
             <EmptyState title="No recorded actions" description="No actions have been logged for this case." />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              {caseItem.action_history.map((act) => (
+              {actionHistory.map((act) => (
                 <div
                   key={act.action_id}
                   style={{

@@ -107,20 +107,6 @@ export function usePagedResource<T>(
           ? null
           : ((rawPage as Page<T>)?.page?.next_cursor ?? null);
 
-        // Pre-populate individual detail items into resourceCache so navigating to any detail page is instant
-        const cleanPath = path.split("?")[0].replace(/\/+$/, "");
-        for (const rawItem of pageData) {
-          if (rawItem && typeof rawItem === "object") {
-            const itemObj = rawItem as Record<string, unknown>;
-            const itemId =
-              (typeof itemObj.id === "string" && itemObj.id) ||
-              (typeof itemObj.case_id === "string" && itemObj.case_id);
-            if (itemId) {
-              resourceCache.set(`${cleanPath}/${itemId}`, rawItem);
-            }
-          }
-        }
-
         if (append) {
           setItems((prev) => [...prev, ...pageData]);
           setCursor(nextCursorVal);
