@@ -362,6 +362,7 @@ export interface SimCase {
     related_case_number: string;
     related_case_title: string;
     relationship_type: string;
+    description?: string | null;
     created_at: string;
   }>;
   last_action_taken?: string;

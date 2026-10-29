@@ -642,6 +642,134 @@ class SimulationEngine {
     this.notify();
   }
 
+  public linkCases(
+    caseIdA: string,
+    caseIdB: string,
+    relationshipType = "same_institution",
+    description?: string,
+  ): { caseA: SimCase; caseB: SimCase } {
+    if (caseIdA === caseIdB) {
+      throw new Error("Cannot link a case to itself.");
+    }
+    const caseA = this.state.cases.find(
+      (c) => c.case_id === caseIdA || c.case_number === caseIdA,
+    );
+    const caseB = this.state.cases.find(
+      (c) => c.case_id === caseIdB || c.case_number === caseIdB,
+    );
+    if (!caseA || !caseB) {
+      throw new Error("One or both cases not found.");
+    }
+    const actor = this.getActivePersona();
+    const timestamp = this.state.simulatedClock;
+
+    if (!caseA.related_cases) caseA.related_cases = [];
+    if (!caseB.related_cases) caseB.related_cases = [];
+
+    const existingA = caseA.related_cases.find(
+      (r) => r.related_case_id === caseB.case_id,
+    );
+    if (!existingA) {
+      caseA.related_cases.push({
+        relationship_id: `rel-${Date.now()}-1`,
+        related_case_id: caseB.case_id,
+        related_case_number: caseB.case_number,
+        related_case_title: caseB.title,
+        relationship_type: relationshipType,
+        description: description || null,
+        created_at: timestamp,
+      });
+      caseA.action_history.unshift({
+        action_id: `act-${Date.now()}-1`,
+        action_type: "case_linked",
+        action_description: `Linked to case ${caseB.case_number} (${relationshipType})${description ? `: "${description}"` : ""}.`,
+        actor_name: actor.name,
+        actor_role: actor.roleName,
+        created_at: timestamp,
+      });
+      caseA.updated_at = timestamp;
+    }
+
+    const existingB = caseB.related_cases.find(
+      (r) => r.related_case_id === caseA.case_id,
+    );
+    if (!existingB) {
+      caseB.related_cases.push({
+        relationship_id: `rel-${Date.now()}-2`,
+        related_case_id: caseA.case_id,
+        related_case_number: caseA.case_number,
+        related_case_title: caseA.title,
+        relationship_type: relationshipType,
+        description: description || null,
+        created_at: timestamp,
+      });
+      caseB.action_history.unshift({
+        action_id: `act-${Date.now()}-2`,
+        action_type: "case_linked",
+        action_description: `Linked to case ${caseA.case_number} (${relationshipType})${description ? `: "${description}"` : ""}.`,
+        actor_name: actor.name,
+        actor_role: actor.roleName,
+        created_at: timestamp,
+      });
+      caseB.updated_at = timestamp;
+    }
+
+    this.notify();
+    return { caseA, caseB };
+  }
+
+  public linkSubmissionToCase(
+    submissionId: string,
+    targetCaseId: string,
+    notes?: string,
+  ): { submission: SimSubmission; targetCase: SimCase } {
+    const submission = this.state.submissions.find(
+      (s) => s.id === submissionId || s.submission_number === submissionId,
+    );
+    if (!submission) throw new Error("Submission not found.");
+
+    const targetCase = this.state.cases.find(
+      (c) => c.case_id === targetCaseId || c.case_number === targetCaseId,
+    );
+    if (!targetCase) throw new Error("Target case not found.");
+
+    const actor = this.getActivePersona();
+    const timestamp = this.state.simulatedClock;
+
+    submission.canonical_case_id = targetCase.case_id;
+    submission.canonical_case_number = targetCase.case_number;
+    submission.status = "canonical_case_created";
+    submission.updated_at = timestamp;
+
+    for (const cand of this.state.duplicateCandidates) {
+      if (
+        cand.submission_id === submission.id &&
+        cand.review_status === "pending"
+      ) {
+        cand.review_status =
+          cand.candidate_case_id === targetCase.case_id
+            ? "confirmed_duplicate"
+            : "related";
+        cand.review_notes = notes || `Linked to case ${targetCase.case_number}`;
+        cand.reviewed_by = actor.name;
+        cand.reviewed_at = timestamp;
+      }
+    }
+
+    targetCase.action_history.unshift({
+      action_id: `act-${Date.now()}`,
+      action_type: "duplicate_linked",
+      action_description: `Submission ${submission.submission_number} linked to this canonical case.${notes ? ` Justification: "${notes}"` : ""}`,
+      actor_name: actor.name,
+      actor_role: actor.roleName,
+      created_at: timestamp,
+    });
+    targetCase.updated_at = timestamp;
+
+    this.notify();
+    return { submission, targetCase };
+  }
+
   // =========================================================================
   // CANONICAL CASE CREATION & WORKSPACE
   // =========================================================================

@@ -5,6 +5,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { ErrorPanel, Loading, PageHeader, StatusBadge } from "../components/ui";
 import { formatDateTime } from "../lib/intake";
 import { useResource } from "../lib/useResource";
+import { useSimulation } from "../simulation/selectors";
 import {
   DECISION_LABELS,
   duplicateStatusLabel,
@@ -31,6 +32,13 @@ export function DuplicateReviewDetailPage() {
 
   const [rejectReason, setRejectReason] = useState("");
   const [showRejectModal, setShowRejectModal] = useState(false);
+
+  // Link to other existing case states
+  const simState = useSimulation();
+  const [showLinkOtherModal, setShowLinkOtherModal] = useState(false);
+  const [selectedTargetCaseId, setSelectedTargetCaseId] = useState("");
+  const [otherCaseSearch, setOtherCaseSearch] = useState("");
+  const [filterSameInstOnly, setFilterSameInstOnly] = useState(true);
 
   const [geminiDupResult, setGeminiDupResult] = useState<GeminiDuplicateResult | null>(null);
   const [isAnalyzingDup, setIsAnalyzingDup] = useState(false);
@@ -139,6 +147,49 @@ export function DuplicateReviewDetailPage() {
       setIsSubmitting(false);
     }
   };
+
+  const handleLinkToOtherCase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTargetCaseId) {
+      setActionError("Please select a target case to link this submission.");
+      return;
+    }
+    setIsSubmitting(true);
+    setActionError(null);
+    try {
+      await api.post(`/duplicate-review/candidates/${candidate.candidate_id}/decide`, {
+        action: "confirmed_duplicate",
+        target_case_id: selectedTargetCaseId,
+        notes: decisionNotes.trim() || `Linked to case ${selectedTargetCaseId}`,
+      });
+      setShowLinkOtherModal(false);
+      navigate("/duplicate-review");
+    } catch (err: any) {
+      setActionError(err?.message || "Failed to link submission to selected case.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const eligibleOtherCases = (simState.cases || [])
+    .filter((c) => {
+      if (filterSameInstOnly && candidate.submission_institution_name) {
+        return (
+          c.institution_name.toLowerCase() ===
+          candidate.submission_institution_name.toLowerCase()
+        );
+      }
+      return true;
+    })
+    .filter((c) => {
+      if (!otherCaseSearch.trim()) return true;
+      const term = otherCaseSearch.toLowerCase();
+      return (
+        c.case_number.toLowerCase().includes(term) ||
+        c.title.toLowerCase().includes(term) ||
+        c.institution_name.toLowerCase().includes(term)
+      );
+    });
 
   const isPending =
     candidate.review_status === "pending" &&
@@ -487,6 +538,20 @@ export function DuplicateReviewDetailPage() {
             </button>
             <button
               type="button"
+              className="button button-secondary"
+              disabled={isSubmitting}
+              onClick={() => {
+                setActionError(null);
+                setOtherCaseSearch("");
+                setFilterSameInstOnly(true);
+                setSelectedTargetCaseId("");
+                setShowLinkOtherModal(true);
+              }}
+            >
+              Link to Other Existing Case...
+            </button>
+            <button
+              type="button"
               className="button button-success"
               disabled={isSubmitting}
               onClick={() => void handleMakeDecision("not_duplicate")}
@@ -574,6 +639,153 @@ export function DuplicateReviewDetailPage() {
                   disabled={isSubmitting}
                 >
                   Confirm Rejection
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Link to Other Existing Case Modal */}
+      {showLinkOtherModal && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => setShowLinkOtherModal(false)}
+        >
+          <div
+            className="card"
+            style={{ maxWidth: "600px", width: "90%", background: "#fff", maxHeight: "90vh", overflowY: "auto" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+              <h3 style={{ margin: 0 }}>Link Submission to Existing Case</h3>
+              <button
+                type="button"
+                className="button button-quiet"
+                onClick={() => setShowLinkOtherModal(false)}
+                style={{ fontSize: "1.2rem", lineHeight: 1 }}
+              >
+                &times;
+              </button>
+            </div>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Select a target canonical case to attach intake submission <strong>{candidate.submission_subject}</strong>.
+            </p>
+
+            <form onSubmit={handleLinkToOtherCase}>
+              <div style={{ marginBottom: "0.75rem" }}>
+                <label style={{ display: "block", marginBottom: "0.25rem", fontWeight: 600 }}>
+                  Search Existing Cases
+                </label>
+                <input
+                  type="text"
+                  placeholder="Search by case number, title, or institution..."
+                  value={otherCaseSearch}
+                  onChange={(e) => setOtherCaseSearch(e.target.value)}
+                  style={{ width: "100%" }}
+                />
+              </div>
+
+              <div style={{ marginBottom: "0.75rem" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={filterSameInstOnly}
+                    onChange={(e) => setFilterSameInstOnly(e.target.checked)}
+                  />
+                  <span>Show only cases for <strong>{candidate.submission_institution_name || "Verified Institution"}</strong></span>
+                </label>
+              </div>
+
+              <div style={{ marginBottom: "0.75rem" }}>
+                <label style={{ display: "block", marginBottom: "0.25rem", fontWeight: 600 }}>
+                  Select Target Canonical Case *
+                </label>
+                <div style={{ maxHeight: "200px", overflowY: "auto", border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", padding: "0.4rem" }}>
+                  {eligibleOtherCases.length === 0 ? (
+                    <p className="small muted" style={{ margin: "0.5rem" }}>No matching canonical cases found.</p>
+                  ) : (
+                    eligibleOtherCases.map((c) => (
+                      <label
+                        key={c.case_id}
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: "0.5rem",
+                          padding: "0.45rem",
+                          borderRadius: "4px",
+                          background: selectedTargetCaseId === c.case_id ? "#f0fdf4" : "transparent",
+                          cursor: "pointer",
+                          marginBottom: "0.25rem",
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="targetCaseSelection"
+                          value={c.case_id}
+                          checked={selectedTargetCaseId === c.case_id}
+                          onChange={(e) => setSelectedTargetCaseId(e.target.value)}
+                          style={{ marginTop: "0.2rem" }}
+                        />
+                        <div style={{ fontSize: "0.84rem" }}>
+                          <span style={{ fontWeight: 700, color: "var(--color-primary)" }}>{c.case_number}</span>
+                          {" — "}
+                          <span>{c.title}</span>
+                          <div className="small muted">
+                            {c.institution_name} &bull; {c.lead_bureau_name}
+                          </div>
+                        </div>
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div style={{ marginBottom: "1rem" }}>
+                <label style={{ display: "block", marginBottom: "0.25rem", fontWeight: 600 }}>
+                  Decision Justification Notes *
+                </label>
+                <textarea
+                  rows={2}
+                  required
+                  placeholder="State the administrative justification for linking this submission..."
+                  value={decisionNotes}
+                  onChange={(e) => setDecisionNotes(e.target.value)}
+                  style={{ width: "100%" }}
+                />
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: "0.5rem",
+                  justifyContent: "flex-end",
+                }}
+              >
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => setShowLinkOtherModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="button button-primary"
+                  disabled={isSubmitting || !selectedTargetCaseId}
+                >
+                  {isSubmitting ? "Linking..." : "Confirm & Link to Case"}
                 </button>
               </div>
             </form>

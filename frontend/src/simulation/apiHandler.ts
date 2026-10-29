@@ -680,6 +680,33 @@ export async function handleSimulatedRequest<T>(
     return { success: true } as unknown as T;
   }
 
+  // Case relationships / linking: POST /cases/:id/relationships or /cases/:id/link
+  const caseLinkMatch = pathname.match(
+    /^\/cases\/([^/]+)\/(?:relationships|link)$/,
+  );
+  if (method === "POST" && caseLinkMatch) {
+    const caseId = caseLinkMatch[1];
+    const relatedCaseId = body.related_case_id || body.target_case_id;
+    if (!relatedCaseId) throw new Error("Target case ID is required to link cases.");
+    const relType = body.relationship_type || "same_institution";
+    const desc = body.description || body.notes;
+    const result = simulationStore.linkCases(caseId, relatedCaseId, relType, desc);
+    return result.caseA as unknown as T;
+  }
+
+  // Submission linking to existing case: POST /submissions/:id/link-case
+  const subLinkMatch = pathname.match(
+    /^\/(?:submissions|duplicate-review\/submissions)\/([^/]+)\/link-case$/,
+  );
+  if (method === "POST" && subLinkMatch) {
+    const subId = subLinkMatch[1];
+    const targetCaseId = body.case_id || body.target_case_id;
+    if (!targetCaseId) throw new Error("Target case ID is required.");
+    const notes = body.notes || body.justification;
+    const result = simulationStore.linkSubmissionToCase(subId, targetCaseId, notes);
+    return result as unknown as T;
+  }
+
   // -------------------------------------------------------------------------
   // /verification/tasks
   // -------------------------------------------------------------------------
@@ -1083,6 +1110,19 @@ export async function handleSimulatedRequest<T>(
   );
   if (method === "POST" && dupDecideMatch) {
     const candidateId = dupDecideMatch[1];
+    if (body.target_case_id) {
+      const cand = state.duplicateCandidates.find(
+        (c) => c.id === candidateId || c.candidate_id === candidateId,
+      );
+      if (cand) {
+        simulationStore.linkSubmissionToCase(
+          cand.submission_id,
+          body.target_case_id,
+          body.review_notes || body.notes,
+        );
+        return { success: true } as unknown as T;
+      }
+    }
     simulationStore.decideDuplicate(
       candidateId,
       body.action || body.decision,

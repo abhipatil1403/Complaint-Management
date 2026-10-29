@@ -203,6 +203,16 @@ export function CaseDetailPage() {
   // Attachment Preview Modal
   const [previewAttachment, setPreviewAttachment] = useState<any | null>(null);
 
+  // Link to Existing Case States
+  const [showLinkCaseModal, setShowLinkCaseModal] = useState(false);
+  const [targetCaseIdToLink, setTargetCaseIdToLink] = useState("");
+  const [relationshipType, setRelationshipType] = useState("same_institution");
+  const [linkDescription, setLinkDescription] = useState("");
+  const [caseSearchTerm, setCaseSearchTerm] = useState("");
+  const [filterSameInstitutionOnly, setFilterSameInstitutionOnly] = useState(true);
+  const [linkSubmitting, setLinkSubmitting] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+
   if (!has("case.view_index") && !has("case.view_detail")) {
     return <PermissionDeniedPage />;
   }
@@ -357,6 +367,49 @@ export function CaseDetailPage() {
       setOfficerSubmitting(false);
     }
   };
+
+  const handleLinkCase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!caseItem || !targetCaseIdToLink) {
+      setLinkError("Please select an existing case to link.");
+      return;
+    }
+    setLinkSubmitting(true);
+    setLinkError(null);
+    try {
+      await api.post(`/cases/${caseItem.case_id}/link`, {
+        related_case_id: targetCaseIdToLink,
+        relationship_type: relationshipType,
+        description: linkDescription.trim(),
+      });
+      setShowLinkCaseModal(false);
+      setTargetCaseIdToLink("");
+      setLinkDescription("");
+      await reload();
+    } catch (err: any) {
+      setLinkError(err?.message || "Failed to link case.");
+    } finally {
+      setLinkSubmitting(false);
+    }
+  };
+
+  const eligibleCases = (simState.cases || [])
+    .filter((c) => c.case_id !== caseItem?.case_id)
+    .filter((c) => {
+      if (filterSameInstitutionOnly && caseItem?.institution_name) {
+        return c.institution_name.toLowerCase() === caseItem.institution_name.toLowerCase();
+      }
+      return true;
+    })
+    .filter((c) => {
+      if (!caseSearchTerm.trim()) return true;
+      const term = caseSearchTerm.toLowerCase();
+      return (
+        c.case_number.toLowerCase().includes(term) ||
+        c.title.toLowerCase().includes(term) ||
+        c.institution_name.toLowerCase().includes(term)
+      );
+    });
 
   const handleRequestTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1375,6 +1428,126 @@ export function CaseDetailPage() {
               </p>
             </div>
           </div>
+        </div>
+
+        {/* Linked & Related Cases Card */}
+        <div className="card" style={{ marginTop: "1rem" }}>
+          <div
+            className="card-header-row"
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "0.85rem",
+              flexWrap: "wrap",
+              gap: "0.75rem",
+            }}
+          >
+            <div>
+              <h3 className="card-title" style={{ margin: 0, fontSize: "1.05rem" }}>
+                Linked &amp; Related Cases ({caseItem.related_cases?.length || 0})
+              </h3>
+              <p className="small muted" style={{ margin: "0.2rem 0 0" }}>
+                Inter-case mappings, cross-bureau overlap records, and connected investigations under AICTE OneDesk.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={() => {
+                setLinkError(null);
+                setCaseSearchTerm("");
+                setFilterSameInstitutionOnly(true);
+                setTargetCaseIdToLink("");
+                setLinkDescription("");
+                setShowLinkCaseModal(true);
+              }}
+            >
+              + Link to Existing Case
+            </button>
+          </div>
+
+          {!caseItem.related_cases || caseItem.related_cases.length === 0 ? (
+            <div
+              style={{
+                padding: "1.25rem",
+                textAlign: "center",
+                background: "#f8fafc",
+                borderRadius: "var(--radius-md)",
+                border: "1px dashed #cbd5e1",
+                color: "#64748b",
+                fontSize: "0.88rem",
+              }}
+            >
+              No related cases currently linked. Click <strong>+ Link to Existing Case</strong> to map overlapping proceedings or connect related complaints for {caseItem.institution_name}.
+            </div>
+          ) : (
+            <div className="table-responsive">
+              <table className="table" style={{ margin: 0 }}>
+                <thead>
+                  <tr>
+                    <th>Linked Case Number</th>
+                    <th>Case Title</th>
+                    <th>Relationship Type</th>
+                    <th>Notes / Basis</th>
+                    <th>Mapped At</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {caseItem.related_cases.map((rel) => (
+                    <tr key={rel.relationship_id}>
+                      <td>
+                        <Link
+                          to={`/cases/${rel.related_case_id}`}
+                          style={{ fontWeight: 700, color: "var(--color-primary)", textDecoration: "underline" }}
+                        >
+                          {rel.related_case_number}
+                        </Link>
+                      </td>
+                      <td style={{ maxWidth: "340px", fontSize: "0.86rem" }}>
+                        {rel.related_case_title}
+                      </td>
+                      <td>
+                        <span
+                          className="badge"
+                          style={{
+                            background:
+                              rel.relationship_type === "overlapping_investigation"
+                                ? "#fee2e2"
+                                : "#e0f2fe",
+                            color:
+                              rel.relationship_type === "overlapping_investigation"
+                                ? "#991b1b"
+                                : "#0369a1",
+                            border:
+                              rel.relationship_type === "overlapping_investigation"
+                                ? "1px solid #fca5a5"
+                                : "1px solid #bae6fd",
+                            fontWeight: 700,
+                            fontSize: "0.75rem",
+                          }}
+                        >
+                          {rel.relationship_type === "same_institution"
+                            ? "Same Institution"
+                            : rel.relationship_type === "overlapping_investigation"
+                            ? "Cross-Bureau Overlap"
+                            : rel.relationship_type === "related"
+                            ? "Related Matter"
+                            : rel.relationship_type === "follow_up"
+                            ? "Follow-Up"
+                            : rel.relationship_type === "dependency"
+                            ? "Dependency"
+                            : rel.relationship_type}
+                        </span>
+                      </td>
+                      <td className="small muted">{rel.description || "—"}</td>
+                      <td className="small muted">{formatDateTime(rel.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
         </>
       )}
@@ -2797,6 +2970,145 @@ export function CaseDetailPage() {
                   disabled={accessSubmitting}
                 >
                   {accessSubmitting ? "Submitting..." : "Submit Access Request"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: LINK TO EXISTING CANONICAL CASE */}
+      {showLinkCaseModal && (
+        <div className="modal-backdrop" onClick={() => setShowLinkCaseModal(false)}>
+          <div className="modal-dialog" style={{ maxWidth: "620px" }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Link to Existing Canonical Case</h3>
+              <button
+                type="button"
+                className="btn-icon-close"
+                onClick={() => setShowLinkCaseModal(false)}
+              >
+                <IconClose className="w-4 h-4" />
+              </button>
+            </div>
+            {linkError && (
+              <div className="badge badge-priority-critical" style={{ marginBottom: "1rem", display: "block" }}>
+                {linkError}
+              </div>
+            )}
+            <form onSubmit={handleLinkCase}>
+              <div style={{ marginBottom: "0.75rem" }}>
+                <label style={{ display: "block", marginBottom: "0.25rem", fontWeight: 600 }}>
+                  Search Cases
+                </label>
+                <input
+                  type="text"
+                  placeholder="Search by case number, title, or institution..."
+                  value={caseSearchTerm}
+                  onChange={(e) => setCaseSearchTerm(e.target.value)}
+                  style={{ width: "100%" }}
+                />
+              </div>
+
+              <div style={{ marginBottom: "0.75rem" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.85rem", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={filterSameInstitutionOnly}
+                    onChange={(e) => setFilterSameInstitutionOnly(e.target.checked)}
+                  />
+                  <span>Show only cases for <strong>{caseItem.institution_name}</strong></span>
+                </label>
+              </div>
+
+              <div style={{ marginBottom: "0.75rem" }}>
+                <label style={{ display: "block", marginBottom: "0.25rem", fontWeight: 600 }}>
+                  Select Canonical Case to Link *
+                </label>
+                <div style={{ maxHeight: "180px", overflowY: "auto", border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", padding: "0.4rem" }}>
+                  {eligibleCases.length === 0 ? (
+                    <p className="small muted" style={{ margin: "0.5rem" }}>No eligible cases found.</p>
+                  ) : (
+                    eligibleCases.map((c) => (
+                      <label
+                        key={c.case_id}
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: "0.5rem",
+                          padding: "0.45rem",
+                          borderRadius: "4px",
+                          background: targetCaseIdToLink === c.case_id ? "#f0fdf4" : "transparent",
+                          cursor: "pointer",
+                          marginBottom: "0.25rem",
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="targetCase"
+                          value={c.case_id}
+                          checked={targetCaseIdToLink === c.case_id}
+                          onChange={(e) => setTargetCaseIdToLink(e.target.value)}
+                          style={{ marginTop: "0.2rem" }}
+                        />
+                        <div style={{ fontSize: "0.84rem" }}>
+                          <span style={{ fontWeight: 700, color: "var(--color-primary)" }}>{c.case_number}</span>
+                          {" — "}
+                          <span>{c.title}</span>
+                          <div className="small muted">
+                            {c.institution_name} &bull; {c.lead_bureau_name}
+                          </div>
+                        </div>
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div style={{ marginBottom: "0.75rem" }}>
+                <label style={{ display: "block", marginBottom: "0.25rem", fontWeight: 600 }}>
+                  Relationship Type
+                </label>
+                <select
+                  value={relationshipType}
+                  onChange={(e) => setRelationshipType(e.target.value)}
+                  style={{ width: "100%" }}
+                >
+                  <option value="same_institution">Same Institution Parallel Case</option>
+                  <option value="overlapping_investigation">Cross-Bureau Overlap / Coordination</option>
+                  <option value="related">Related Regulatory Matter</option>
+                  <option value="follow_up">Follow-Up Investigation</option>
+                  <option value="dependency">Prerequisite / Dependency</option>
+                </select>
+              </div>
+
+              <div style={{ marginBottom: "1rem" }}>
+                <label style={{ display: "block", marginBottom: "0.25rem", fontWeight: 600 }}>
+                  Justification / Basis for Link (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="State the administrative justification for linking these cases..."
+                  value={linkDescription}
+                  onChange={(e) => setLinkDescription(e.target.value)}
+                  style={{ width: "100%" }}
+                />
+              </div>
+
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => setShowLinkCaseModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="button button-primary"
+                  disabled={linkSubmitting || !targetCaseIdToLink}
+                >
+                  {linkSubmitting ? "Linking..." : "Confirm Case Link"}
                 </button>
               </div>
             </form>
