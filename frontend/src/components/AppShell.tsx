@@ -4,14 +4,24 @@ import { useAuth } from "../auth/AuthProvider";
 import { simulationStore } from "../simulation/simulationStore";
 import {
   IconAdministration,
+  IconAlertTriangle,
   IconAnalytics,
+  IconAudit,
   IconBell,
   IconBureaus,
   IconCases,
+  IconDashboard,
+  IconDecisions,
   IconDuplicate,
+  IconGlobe,
+  IconGovernment,
+  IconHelpCircle,
   IconInstitutions,
   IconIntake,
+  IconKey,
+  IconLogout,
   IconRegions,
+  IconSettings,
   IconShield,
   IconVerification,
 } from "./Icons";
@@ -94,7 +104,7 @@ export function AppShell() {
                   }
                 >
                   <span className="opacity-80">
-                    <IconShield className="w-4 h-4" />
+                    <IconDashboard className="w-4 h-4" />
                   </span>
                   <span>{landingLabel(activePersona)}</span>
                 </NavLink>
@@ -200,25 +210,33 @@ export function AppShell() {
 
             {(has("case.access.manage") || has("case.transfer.manage")) && (
               <NavLink to="/decisions" className="sidebar-link">
-                <IconVerification />
+                <span className="opacity-80">
+                  <IconDecisions className="w-4 h-4" />
+                </span>
                 <span>Pending decisions</span>
               </NavLink>
             )}
             {activePersona.bureauId && (
               <NavLink to="/access-requests" className="sidebar-link">
-                <IconShield />
+                <span className="opacity-80">
+                  <IconKey className="w-4 h-4" />
+                </span>
                 <span>My access requests</span>
               </NavLink>
             )}
             {has("escalation.manage") && (
               <NavLink to="/escalations" className="sidebar-link">
-                <IconAnalytics />
+                <span className="opacity-80">
+                  <IconAlertTriangle className="w-4 h-4 text-warning" />
+                </span>
                 <span>Escalations</span>
               </NavLink>
             )}
             {activePersona.roleCode === "AUDITOR" && (
               <NavLink to="/audit-log" className="sidebar-link">
-                <IconCases />
+                <span className="opacity-80">
+                  <IconAudit className="w-4 h-4" />
+                </span>
                 <span>Audit register</span>
               </NavLink>
             )}
@@ -298,7 +316,9 @@ export function AppShell() {
                     `sidebar-link ${isActive ? "active" : ""}`
                   }
                 >
-                  <IconInstitutions />
+                  <span className="opacity-80">
+                    <IconGlobe className="w-4 h-4" />
+                  </span>
                   <span>AICTE Web Portal</span>
                 </NavLink>
               </li>
@@ -309,7 +329,9 @@ export function AppShell() {
                     `sidebar-link ${isActive ? "active" : ""}`
                   }
                 >
-                  <IconIntake />
+                  <span className="opacity-80">
+                    <IconGovernment className="w-4 h-4" />
+                  </span>
                   <span>CPGRAMS Portal</span>
                 </NavLink>
               </li>
@@ -319,13 +341,22 @@ export function AppShell() {
 
         <div className="sidebar-bottom">
           <NavLink to="/settings" className="sidebar-link">
-            <IconAdministration /> Settings
+            <span className="opacity-80">
+              <IconSettings className="w-4 h-4" />
+            </span>
+            <span>Settings</span>
           </NavLink>
           <NavLink to="/help" className="sidebar-link">
-            <IconShield /> Help center
+            <span className="opacity-80">
+              <IconHelpCircle className="w-4 h-4" />
+            </span>
+            <span>Help center</span>
           </NavLink>
           <button className="sidebar-link" onClick={() => void signOut()}>
-            ↪ Sign out
+            <span className="opacity-80">
+              <IconLogout className="w-4 h-4" />
+            </span>
+            <span>Sign out</span>
           </button>
         </div>
       </aside>

@@ -16,7 +16,7 @@ import {
   IconDownload,
   IconPaperclip,
   IconPlus,
-  IconShield,
+  IconHistory,
 } from "../components/Icons";
 import { EmptyState, Loading } from "../components/ui";
 import {
@@ -981,7 +981,7 @@ export function CaseDetailPage() {
                     flexShrink: 0,
                   }}
                 >
-                  <IconShield className="w-4 h-4" />
+                  <IconHistory className="w-4 h-4" />
                 </div>
                 <div style={{ flex: 1 }}>
                   <div
