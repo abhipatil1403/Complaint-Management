@@ -196,9 +196,55 @@ PHASE2_VERIFICATION_ROLE_GRANTS: dict[str, tuple[str, ...]] = {
 }
 
 
+# --- Phase 2.3 duplicate review and canonical case creation capabilities ---
+DUPLICATE_REVIEW = "duplicate.review"
+CASE_CREATE = "case.create"
+CASE_VIEW_INDEX = "case.view_index"
+CASE_VIEW_DETAIL = "case.view_detail"
+SUBMISSION_REJECT = "submission.reject"
+
+PHASE2_DUPLICATE_PERMISSIONS: dict[str, dict[str, str]] = {
+    DUPLICATE_REVIEW: {
+        "name": "Review duplicate complaint candidates",
+        "resource_type": "duplicate_candidates",
+        "action_type": "review",
+    },
+    CASE_CREATE: {
+        "name": "Create canonical complaint cases",
+        "resource_type": "cases",
+        "action_type": "create",
+    },
+    CASE_VIEW_INDEX: {
+        "name": "View cross-bureau minimal case index",
+        "resource_type": "cases",
+        "action_type": "view_index",
+    },
+    CASE_VIEW_DETAIL: {
+        "name": "View full case details",
+        "resource_type": "cases",
+        "action_type": "view_detail",
+    },
+    SUBMISSION_REJECT: {
+        "name": "Reject invalid intake submissions",
+        "resource_type": "submissions",
+        "action_type": "reject",
+    },
+}
+
+PHASE2_DUPLICATE_ROLE_GRANTS: dict[str, tuple[str, ...]] = {
+    SUPER_ADMIN: (DUPLICATE_REVIEW, CASE_CREATE, CASE_VIEW_INDEX, CASE_VIEW_DETAIL, SUBMISSION_REJECT),
+    SENIOR_MANAGEMENT: (DUPLICATE_REVIEW, CASE_VIEW_INDEX, CASE_VIEW_DETAIL),
+    CASE_OFFICER: (CASE_CREATE, CASE_VIEW_INDEX, CASE_VIEW_DETAIL),
+    BUREAU_ADMIN: (CASE_CREATE, CASE_VIEW_INDEX, CASE_VIEW_DETAIL),
+    CROSS_BUREAU_COLLABORATOR: (CASE_VIEW_INDEX, CASE_VIEW_DETAIL),
+    AUDITOR: (CASE_VIEW_INDEX,),
+}
+
+
 def to_db_code(api_code: str) -> str:
     return api_code.strip().upper()
 
 
 def to_api_code(db_code: str) -> str:
     return db_code.strip().lower()
+

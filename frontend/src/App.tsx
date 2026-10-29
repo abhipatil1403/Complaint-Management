@@ -6,8 +6,12 @@ import { AppShell } from "./components/AppShell";
 import { AdministrationPage } from "./pages/AdministrationPage";
 import { BureauDetailPage } from "./pages/BureauDetailPage";
 import { BureausPage } from "./pages/BureausPage";
+import { CaseDetailPage } from "./pages/CaseDetailPage";
+import { CasesPage } from "./pages/CasesPage";
 import { DemoHomePage } from "./pages/DemoHomePage";
 import { DemoIntakePage } from "./pages/DemoIntakePage";
+import { DuplicateReviewDetailPage } from "./pages/DuplicateReviewDetailPage";
+import { DuplicateReviewQueuePage } from "./pages/DuplicateReviewQueuePage";
 import { HomePage } from "./pages/HomePage";
 import { InstitutionDetailPage } from "./pages/InstitutionDetailPage";
 import { InstitutionsPage } from "./pages/InstitutionsPage";
@@ -34,6 +38,13 @@ export function App() {
               <Route index element={<HomePage />} />
               <Route path="verification" element={<VerificationPage />} />
               <Route path="verification/tasks/:taskId" element={<VerificationDetailPage />} />
+              <Route path="duplicate-review" element={<DuplicateReviewQueuePage />} />
+              <Route
+                path="duplicate-review/candidates/:candidateId"
+                element={<DuplicateReviewDetailPage />}
+              />
+              <Route path="cases" element={<CasesPage />} />
+              <Route path="cases/:caseId" element={<CaseDetailPage />} />
               <Route path="intake" element={<IntakePage />} />
               <Route path="intake/:submissionId" element={<IntakeDetailPage />} />
               <Route path="institutions" element={<InstitutionsPage />} />

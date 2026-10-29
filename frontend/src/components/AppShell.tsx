@@ -9,6 +9,8 @@ export function AppShell() {
 
   const navigation = [
     { to: "/verification", label: "Verification", visible: has("institution.verify") },
+    { to: "/duplicate-review", label: "Duplicate Review", visible: has("duplicate.review") },
+    { to: "/cases", label: "Cases", visible: has("case.view_index") || has("case.view_detail") },
     { to: "/intake", label: "Intake", visible: has("submission.view") },
     { to: "/institutions", label: "Institutions", visible: has("institution.view") },
     { to: "/bureaus", label: "Bureaus", visible: has("bureau.view") },
@@ -31,7 +33,7 @@ export function AppShell() {
           </span>
           <span>
             <strong>AICTE OneDesk</strong>
-            <small>Complaint monitoring — Phase 2.2</small>
+            <small>Complaint monitoring — Phase 2.3</small>
           </span>
         </Link>
 

@@ -373,3 +373,169 @@ export interface CorrectionRoundPayload {
   expected_submission_updated_at?: string | null;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Phase 2.3: Duplicate Review & Canonical Cases Types                        */
+/* -------------------------------------------------------------------------- */
+
+export type DuplicateCandidateStatus = "pending" | "confirmed_duplicate" | "not_duplicate" | "related";
+export type DuplicateReviewDecision = "confirmed_duplicate" | "not_duplicate" | "related";
+export type CasePriority = "low" | "normal" | "high" | "critical";
+export type CaseVisibility = "restricted" | "confidential";
+
+export interface DuplicateCandidateItem {
+  candidate_id: string;
+  submission_id: string;
+  candidate_case_id: string;
+  case_number: string;
+  institution_id: string | null;
+  institution_name: string | null;
+  similarity_score: number;
+  matching_method: string;
+  matching_signals: Record<string, unknown>;
+  review_status: DuplicateCandidateStatus;
+  reviewed_at: string | null;
+  reviewer_user_id: string | null;
+  review_notes: string | null;
+  candidate_created_at: string;
+  candidate_updated_at: string;
+  submission_updated_at: string;
+  submission_subject: string;
+  submission_received_at: string;
+}
+
+export interface DuplicateCandidateDetail {
+  candidate_id: string;
+  submission_id: string;
+  submission_subject: string;
+  submission_body: string;
+  submission_category_id: string | null;
+  submission_category_name: string | null;
+  submission_institution_id: string | null;
+  submission_institution_name: string | null;
+  submission_updated_at: string;
+  candidate_case_id: string;
+  case_number: string;
+  case_title: string;
+  case_status: string;
+  case_category_id: string | null;
+  case_category_name: string | null;
+  case_created_at: string;
+  case_lead_bureau_id: string | null;
+  case_lead_bureau_name: string | null;
+  similarity_score: number;
+  matching_method: string;
+  matching_signals: Record<string, unknown>;
+  review_status: DuplicateCandidateStatus;
+  reviewed_at: string | null;
+  reviewer_user_id: string | null;
+  review_notes: string | null;
+  candidate_created_at: string;
+  candidate_updated_at: string;
+}
+
+export interface CandidateScreeningRequest {
+  submission_id: string;
+  expected_submission_updated_at: string;
+}
+
+export interface CandidateScreeningResponse {
+  inserted_count: number;
+}
+
+export interface DuplicateDecisionRequest {
+  action: DuplicateReviewDecision;
+  notes: string;
+  expected_submission_updated_at: string;
+  expected_candidate_updated_at: string;
+}
+
+export interface SubmissionRejectionRequest {
+  reason: string;
+  expected_submission_updated_at: string;
+}
+
+export interface CaseIndexItem {
+  case_id: string;
+  case_number: string;
+  institution_id: string;
+  institution_name: string;
+  institution_region: string | null;
+  category_id: string | null;
+  category_name: string | null;
+  status: string;
+  priority: string;
+  lead_bureau_id: string | null;
+  lead_bureau_name: string | null;
+  lead_bureau_code: string | null;
+  opened_at: string;
+  closed_at: string | null;
+  can_view_details: boolean;
+}
+
+export interface CollaboratingBureau {
+  bureau_id: string;
+  bureau_name: string;
+  bureau_code: string;
+  assignment_type: string;
+  assignment_status: string;
+  assigned_at: string;
+}
+
+export interface RelatedCaseItem {
+  relationship_id: string;
+  related_case_id: string;
+  related_case_number: string;
+  related_case_title: string;
+  relationship_type: string;
+  description: string | null;
+  created_at: string;
+}
+
+export interface CaseActionHistoryItem {
+  action_id: string;
+  action_type: string;
+  action_description: string;
+  previous_status: string | null;
+  new_status: string | null;
+  actor_user_id: string | null;
+  created_at: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface CaseDetail {
+  case_id: string;
+  case_number: string;
+  title: string;
+  description: string;
+  institution_id: string;
+  institution_name: string;
+  institution_code: string | null;
+  institution_region: string | null;
+  category_id: string | null;
+  category_name: string | null;
+  status: string;
+  priority: string;
+  visibility: string;
+  source_submission_id: string;
+  opened_at: string;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  lead_bureau_id: string | null;
+  lead_bureau_name: string | null;
+  lead_bureau_code: string | null;
+  collaborating_bureaus: CollaboratingBureau[];
+  related_cases: RelatedCaseItem[];
+  action_history: CaseActionHistoryItem[];
+}
+
+export interface CaseCreateRequest {
+  submission_id: string;
+  lead_bureau_id: string;
+  title: string;
+  description: string;
+  priority?: CasePriority;
+  visibility?: CaseVisibility;
+  expected_submission_updated_at: string;
+}
+

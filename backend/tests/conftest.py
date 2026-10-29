@@ -37,18 +37,26 @@ UNPROVISIONED_ID = UUID("88888888-8888-8888-8888-888888888888")
 
 ALL_PHASE1 = frozenset(perms.PHASE1_PERMISSIONS)
 # Super Admin also holds the explicit Phase 2.1 intake and Phase 2.2
-# verification capabilities. The Phase 1 catalogue is frozen, so the
-# catalogues stay separate.
+# verification capabilities, as well as Phase 2.3 duplicate review capabilities.
+# The Phase 1 catalogue is frozen, so the catalogues stay separate.
 SUPER_PERMISSIONS = (
     ALL_PHASE1
     | frozenset(perms.PHASE2_ROLE_GRANTS[perms.SUPER_ADMIN])
     | frozenset(perms.PHASE2_VERIFICATION_ROLE_GRANTS[perms.SUPER_ADMIN])
+    | frozenset(perms.PHASE2_DUPLICATE_ROLE_GRANTS[perms.SUPER_ADMIN])
 )
 
 
 def role_permissions(role_code: str) -> frozenset[str]:
     """Test personas must mirror the catalogue exactly, or they prove nothing."""
-    return frozenset(perms.ROLE_DEFINITIONS[role_code]["permissions"])
+    base = set(perms.ROLE_DEFINITIONS[role_code]["permissions"])
+    if role_code in perms.PHASE2_ROLE_GRANTS:
+        base.update(perms.PHASE2_ROLE_GRANTS[role_code])
+    if role_code in perms.PHASE2_VERIFICATION_ROLE_GRANTS:
+        base.update(perms.PHASE2_VERIFICATION_ROLE_GRANTS[role_code])
+    if role_code in perms.PHASE2_DUPLICATE_ROLE_GRANTS:
+        base.update(perms.PHASE2_DUPLICATE_ROLE_GRANTS[role_code])
+    return frozenset(base)
 
 
 READ_ONLY = role_permissions(perms.SENIOR_MANAGEMENT)
@@ -152,9 +160,9 @@ def build_personas() -> dict[UUID, Principal]:
         designation="Auditor",
         employee_code="DEMO-0006",
         account_status="active",
-        roles=(_role(perms.AUDITOR, "Auditor", READ_ONLY, None),),
+        roles=(_role(perms.AUDITOR, "Auditor", role_permissions(perms.AUDITOR), None),),
         memberships=(),
-        global_permissions=READ_ONLY,
+        global_permissions=role_permissions(perms.AUDITOR),
         bureau_permissions={},
     )
     return {
