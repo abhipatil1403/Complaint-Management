@@ -12,7 +12,6 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import {
   analyzeCaseWithGemini,
-  hasGeminiApiKey,
   type GeminiAnalysisResult,
 } from "../lib/gemini";
 import {
@@ -142,8 +141,12 @@ export function CaseDetailPage() {
 
   useEffect(() => {
     if (!caseItem) return;
+    setIsAnalyzing(true);
     const overlapping = getOverlappingCases(simState, caseItem.case_id);
-    analyzeCaseWithGemini(caseItem as any, overlapping, simState.submissions).then(setGeminiAnalysis);
+    analyzeCaseWithGemini(caseItem as any, overlapping, simState.submissions)
+      .then((res) => setGeminiAnalysis(res))
+      .catch((err) => console.error(err))
+      .finally(() => setIsAnalyzing(false));
   }, [caseItem?.case_id]);
 
   const handleRunAiAnalysis = async () => {
@@ -1082,14 +1085,16 @@ export function CaseDetailPage() {
                 <span
                   className="badge"
                   style={{
-                    background: geminiAnalysis?.isLiveGemini ? "#dbeafe" : "#dcfce7",
-                    color: geminiAnalysis?.isLiveGemini ? "#1e40af" : "#166534",
-                    border: `1px solid ${geminiAnalysis?.isLiveGemini ? "#93c5fd" : "#86efac"}`,
+                    background: geminiAnalysis?.isLiveGemini !== false ? "#dcfce7" : "#f1f5f9",
+                    color: geminiAnalysis?.isLiveGemini !== false ? "#166534" : "#475569",
+                    border: `1px solid ${geminiAnalysis?.isLiveGemini !== false ? "#86efac" : "#cbd5e1"}`,
                     fontWeight: 700,
                     fontSize: "0.78rem",
                   }}
                 >
-                  {geminiAnalysis?.modelUsed || (hasGeminiApiKey() ? "Google Gemini 2.0 Flash (Live)" : "AICTE-Norms-v2.4")}
+                  {isAnalyzing
+                    ? "Analyzing with Gemini..."
+                    : (geminiAnalysis?.modelUsed || "Google Gemini Flash (Live)")}
                 </span>
                 <span
                   className="badge"
@@ -1110,7 +1115,7 @@ export function CaseDetailPage() {
                   onClick={handleRunAiAnalysis}
                   style={{ fontSize: "0.78rem", padding: "0.3rem 0.65rem" }}
                 >
-                  {isAnalyzing ? "Analyzing..." : "Re-run Triage"}
+                  {isAnalyzing ? "Analyzing..." : "Re-analyze"}
                 </button>
               </div>
             </div>

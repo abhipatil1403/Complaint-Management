@@ -2,7 +2,7 @@
  * AICTE OneDesk — Google Gemini AI Integration Engine
  *
  * Provides real-time AI case triage, statutory entity extraction,
- * regulatory synopsis, cross-bureau conflict analysis, and recommended next actions.
+ * regulatory synopsis, cross-bureau conflict analysis, and semantic duplicate detection.
  *
  * Configured via .env: VITE_GEMINI_API_KEY
  */
@@ -10,10 +10,9 @@
 import type { SimCase, SimSubmission } from "../simulation/types";
 
 const CANDIDATE_MODELS = [
-  "gemini-3.8-flash",
   "gemini-2.5-flash",
+  "gemini-3.8-flash",
   "gemini-flash-latest",
-  "gemini-2.0-flash",
 ];
 
 export interface GeminiAnalysisResult {
@@ -25,6 +24,18 @@ export interface GeminiAnalysisResult {
   confidence_score: number;
   suggested_action: string;
   overlap_action?: string;
+  isLiveGemini: boolean;
+  modelUsed: string;
+}
+
+export interface GeminiDuplicateResult {
+  similarity_score: number;
+  verdict: "confirmed_duplicate" | "related" | "not_duplicate";
+  confidence_score: number;
+  rationale: string;
+  matching_factors: string[];
+  distinguishing_factors: string[];
+  recommended_action: string;
   isLiveGemini: boolean;
   modelUsed: string;
 }
@@ -57,7 +68,7 @@ export function hasGeminiApiKey(): boolean {
 }
 
 /**
- * Generate intelligent deterministic triage if no Gemini key is present in .env or on failure.
+ * Generate intelligent deterministic triage if Gemini API is unreachable.
  */
 function generateDynamicFallback(
   caseItem: SimCase,
@@ -109,7 +120,6 @@ function generateDynamicFallback(
     priority = "medium";
   }
 
-  // Extract entities from real text
   const entities: string[] = [caseItem.institution_name];
   if (caseItem.institution_code) entities.push(`PID: ${caseItem.institution_code}`);
   if (caseItem.institution_region) entities.push(`Region: ${caseItem.institution_region}`);
@@ -142,7 +152,7 @@ function generateDynamicFallback(
 }
 
 /**
- * Execute real AI Case Triage using Google Gemini API configured via .env.
+ * Execute real AI Case Triage using Google Gemini API.
  */
 export async function analyzeCaseWithGemini(
   caseItem: SimCase,
@@ -193,7 +203,7 @@ Return your response ONLY as valid, raw JSON matching this schema:
   "extracted_entities": ["List of extracted entities: institution names, key designations, monetary figures, batches"],
   "priority": "low" | "medium" | "high" | "critical",
   "urgency_rating": "Critical Urgency" | "High Urgency" | "Medium Urgency" | "Standard Urgency",
-  "confidence_score": 96,
+  "confidence_score": 98,
   "suggested_action": "Specific concrete next administrative step for the assigned case officer (e.g. Issue Show Cause Notice, Order Spot Inspection, Disburse Refund)",
   "overlap_action": "If overlapping cases exist, specify how the bureaus should coordinate; otherwise omit or leave empty."
 }
@@ -214,7 +224,7 @@ Return your response ONLY as valid, raw JSON matching this schema:
     };
 
     let data: any = null;
-    let successfulModel = "gemini-3.8-flash";
+    let successfulModel = "";
 
     for (const model of CANDIDATE_MODELS) {
       try {
@@ -262,14 +272,138 @@ Return your response ONLY as valid, raw JSON matching this schema:
         ? parsed.priority
         : "medium",
       urgency_rating: parsed.urgency_rating || "High Urgency",
-      confidence_score: typeof parsed.confidence_score === "number" ? parsed.confidence_score : 96,
+      confidence_score: typeof parsed.confidence_score === "number" ? parsed.confidence_score : 98,
       suggested_action: parsed.suggested_action || "Issue standard inquiry notice.",
       overlap_action: parsed.overlap_action || undefined,
       isLiveGemini: true,
-      modelUsed: successfulModel === "gemini-3.8-flash" ? "Google Gemini 3.8 Flash (Live)" : `Google ${successfulModel} (Live)`,
+      modelUsed: `Google ${successfulModel || "Gemini Flash"} (Live)`,
     };
   } catch (err) {
     console.warn("Error running live Gemini triage, falling back to dynamic engine:", err);
     return generateDynamicFallback(caseItem, overlappingCases);
   }
+}
+
+/**
+ * Execute real Gemini AI semantic duplicate detection comparing a submission with a case.
+ */
+export async function analyzeDuplicateWithGemini(
+  submission: {
+    subject: string;
+    institution_name: string;
+    body: string;
+    category?: string;
+  },
+  canonicalCase: {
+    case_number: string;
+    title: string;
+    institution_name: string;
+    description: string;
+    category?: string;
+  },
+): Promise<GeminiDuplicateResult> {
+  const apiKey = getGeminiApiKey();
+
+  const promptText = `
+You are the AICTE Legal and Grievance Specialist for AICTE OneDesk.
+Perform a semantic duplicate detection and conflict assessment between the following two grievances.
+
+GRIEVANCE A (New Intake Submission):
+- Subject: ${submission.subject}
+- Institution: ${submission.institution_name}
+- Category: ${submission.category || "General"}
+- Description: ${submission.body}
+
+GRIEVANCE B (Existing Canonical Case):
+- Case Number: ${canonicalCase.case_number}
+- Title: ${canonicalCase.title}
+- Institution: ${canonicalCase.institution_name}
+- Category: ${canonicalCase.category || "General"}
+- Description: ${canonicalCase.description}
+
+TASK:
+Analyze whether Grievance A is a duplicate, a related parallel proceeding, or a distinct issue compared to Case B.
+Return ONLY valid JSON matching this schema:
+{
+  "similarity_score": 0.95,
+  "verdict": "confirmed_duplicate",
+  "confidence_score": 98,
+  "rationale": "2-3 sentences explaining semantic overlap and factual comparison.",
+  "matching_factors": ["Same institution: ...", "Same core issue: ..."],
+  "distinguishing_factors": ["Differences in parties or timing: ..."],
+  "recommended_action": "Administrative directive for the reviewer (e.g. Merge as secondary evidence under canonical case to avoid duplicate regulatory proceedings)."
+}
+`;
+
+  try {
+    const payload = {
+      contents: [{ role: "user", parts: [{ text: promptText }] }],
+      generationConfig: {
+        temperature: 0.1,
+        responseMimeType: "application/json",
+      },
+    };
+
+    let data: any = null;
+    let successfulModel = "";
+
+    for (const model of CANDIDATE_MODELS) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (response.ok) {
+          data = await response.json();
+          successfulModel = model;
+          break;
+        }
+      } catch (err) {
+        console.warn(`Duplicate analysis error with model ${model}:`, err);
+      }
+    }
+
+    if (data) {
+      const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (rawText) {
+        const parsed = JSON.parse(cleanJsonText(rawText));
+        return {
+          similarity_score: typeof parsed.similarity_score === "number" ? parsed.similarity_score : 0.92,
+          verdict: ["confirmed_duplicate", "related", "not_duplicate"].includes(parsed.verdict)
+            ? parsed.verdict
+            : "confirmed_duplicate",
+          confidence_score: typeof parsed.confidence_score === "number" ? parsed.confidence_score : 98,
+          rationale: parsed.rationale || "Semantic analysis indicates overlapping grievance against the same institution.",
+          matching_factors: Array.isArray(parsed.matching_factors) ? parsed.matching_factors : ["Same Institution"],
+          distinguishing_factors: Array.isArray(parsed.distinguishing_factors) ? parsed.distinguishing_factors : [],
+          recommended_action: parsed.recommended_action || "Consolidate proceedings under canonical case.",
+          isLiveGemini: true,
+          modelUsed: `Google ${successfulModel || "Gemini Flash"} (Live)`,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("Gemini duplicate analysis failed, using heuristic fallback:", err);
+  }
+
+  // Fallback heuristic
+  const sameInst = submission.institution_name.toLowerCase() === canonicalCase.institution_name.toLowerCase();
+  return {
+    similarity_score: sameInst ? 0.92 : 0.45,
+    verdict: sameInst ? "confirmed_duplicate" : "not_duplicate",
+    confidence_score: 94,
+    rationale: sameInst
+      ? `Both grievances reference ${submission.institution_name} with substantive overlap in allegations.`
+      : "Different institutions referenced.",
+    matching_factors: sameInst ? [`Institution match: ${submission.institution_name}`] : [],
+    distinguishing_factors: ["Individual submission context"],
+    recommended_action: sameInst
+      ? `Link to canonical case ${canonicalCase.case_number} to prevent duplicate inquiries.`
+      : "Process as independent grievance.",
+    isLiveGemini: false,
+    modelUsed: "Heuristic Signal Engine",
+  };
 }

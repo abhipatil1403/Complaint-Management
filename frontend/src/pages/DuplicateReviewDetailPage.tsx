@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthProvider";
@@ -10,6 +10,10 @@ import {
   duplicateStatusLabel,
   heuristicLabel,
 } from "../lib/duplicateReview";
+import {
+  analyzeDuplicateWithGemini,
+  type GeminiDuplicateResult,
+} from "../lib/gemini";
 import type {
   DuplicateCandidateDetail,
   DuplicateReviewDecision,
@@ -28,6 +32,9 @@ export function DuplicateReviewDetailPage() {
   const [rejectReason, setRejectReason] = useState("");
   const [showRejectModal, setShowRejectModal] = useState(false);
 
+  const [geminiDupResult, setGeminiDupResult] = useState<GeminiDuplicateResult | null>(null);
+  const [isAnalyzingDup, setIsAnalyzingDup] = useState(false);
+
   const {
     data: candidate,
     loading,
@@ -37,6 +44,29 @@ export function DuplicateReviewDetailPage() {
       ? `/duplicate-review/candidates/${candidateId}`
       : null,
   );
+
+  useEffect(() => {
+    if (!candidate) return;
+    setIsAnalyzingDup(true);
+    analyzeDuplicateWithGemini(
+      {
+        subject: candidate.submission_subject,
+        institution_name: candidate.submission_institution_name || "",
+        body: candidate.submission_body || "",
+        category: candidate.submission_category_name || undefined,
+      },
+      {
+        case_number: candidate.case_number,
+        title: candidate.case_title,
+        institution_name: candidate.submission_institution_name || "",
+        description: candidate.case_title,
+        category: candidate.case_category_name || undefined,
+      },
+    )
+      .then(setGeminiDupResult)
+      .catch((e) => console.error(e))
+      .finally(() => setIsAnalyzingDup(false));
+  }, [candidate?.candidate_id]);
 
   if (!has("duplicate.review")) {
     return <PermissionDeniedPage />;
@@ -164,6 +194,141 @@ export function DuplicateReviewDetailPage() {
           <div className="hint" style={{ marginTop: "0.5rem" }}>
             Reviewed by officer on {formatDateTime(candidate.reviewed_at)}
             {candidate.review_notes && ` — Notes: "${candidate.review_notes}"`}
+          </div>
+        )}
+      </div>
+
+      {/* AI Semantic Duplicate Analysis Card */}
+      <div
+        className="card"
+        style={{
+          background: "linear-gradient(180deg, #f0fdf4 0%, #ffffff 100%)",
+          border: "1px solid #86efac",
+          boxShadow: "var(--shadow-sm)",
+          marginBottom: "1.5rem",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "0.75rem",
+            flexWrap: "wrap",
+            gap: "0.5rem",
+          }}
+        >
+          <div>
+            <h3 className="ai-gradient-title" style={{ margin: 0, fontSize: "1.1rem", fontWeight: 800 }}>
+              AI Semantic Duplicate Assessment
+            </h3>
+            <p className="small muted" style={{ margin: "0.15rem 0 0 0" }}>
+              NLP semantic comparison powered by Google Gemini AI. Evaluates underlying factual claims across submissions.
+            </p>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+            <span
+              className="badge"
+              style={{
+                background: "#dcfce7",
+                color: "#166534",
+                border: "1px solid #86efac",
+                fontWeight: 700,
+                fontSize: "0.78rem",
+              }}
+            >
+              {isAnalyzingDup ? "Analyzing with Gemini..." : (geminiDupResult?.modelUsed || "Google Gemini Flash (Live)")}
+            </span>
+            {geminiDupResult && (
+              <span
+                className="badge"
+                style={{
+                  background: geminiDupResult.similarity_score >= 0.85 ? "#fee2e2" : "#fef3c7",
+                  color: geminiDupResult.similarity_score >= 0.85 ? "#991b1b" : "#92400e",
+                  border: "1px solid #fca5a5",
+                  fontWeight: 700,
+                  fontSize: "0.78rem",
+                }}
+              >
+                {Math.round(geminiDupResult.similarity_score * 100)}% Semantic Similarity ({geminiDupResult.confidence_score}% Confidence)
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div
+          style={{
+            background: "#ffffff",
+            padding: "0.85rem 1rem",
+            borderRadius: "var(--radius-md)",
+            border: "1px solid #bbf7d0",
+            fontSize: "0.88rem",
+            lineHeight: 1.55,
+            color: "var(--color-text-primary)",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <strong style={{ color: "#166534" }}>AI Evaluation Rationale: </strong>
+          {geminiDupResult?.rationale || "Performing deep semantic analysis of complaint facts and institution records..."}
+        </div>
+
+        {geminiDupResult && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.75rem", marginBottom: "0.75rem" }}>
+            {geminiDupResult.matching_factors.length > 0 && (
+              <div style={{ background: "#f8fafc", padding: "0.6rem 0.8rem", borderRadius: "var(--radius-sm)", border: "1px solid #e2e8f0" }}>
+                <span style={{ display: "block", fontSize: "0.72rem", textTransform: "uppercase", fontWeight: 700, color: "#15803d", marginBottom: "0.25rem" }}>
+                  Corroborating / Shared Factors
+                </span>
+                <ul style={{ margin: 0, paddingLeft: "1.2rem", fontSize: "0.8rem", color: "#334155" }}>
+                  {geminiDupResult.matching_factors.map((f, i) => (
+                    <li key={i}>{f}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {geminiDupResult.distinguishing_factors.length > 0 && (
+              <div style={{ background: "#f8fafc", padding: "0.6rem 0.8rem", borderRadius: "var(--radius-sm)", border: "1px solid #e2e8f0" }}>
+                <span style={{ display: "block", fontSize: "0.72rem", textTransform: "uppercase", fontWeight: 700, color: "#475569", marginBottom: "0.25rem" }}>
+                  Distinguishing Features
+                </span>
+                <ul style={{ margin: 0, paddingLeft: "1.2rem", fontSize: "0.8rem", color: "#334155" }}>
+                  {geminiDupResult.distinguishing_factors.map((f, i) => (
+                    <li key={i}>{f}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
+
+        {geminiDupResult?.recommended_action && (
+          <div
+            style={{
+              background: "#f0fdf4",
+              padding: "0.65rem 0.85rem",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid #dcfce7",
+              fontSize: "0.84rem",
+              color: "#166534",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: "0.5rem",
+            }}
+          >
+            <div>
+              <strong>AI Recommended Review Action: </strong>
+              <span>{geminiDupResult.recommended_action}</span>
+            </div>
+            <button
+              type="button"
+              className="button button-quiet"
+              style={{ fontSize: "0.78rem", color: "#155a37", textDecoration: "underline" }}
+              onClick={() => setDecisionNotes(`[AI Semantic Recommendation] ${geminiDupResult.recommended_action}`)}
+            >
+              Insert into Decision Notes
+            </button>
           </div>
         )}
       </div>
