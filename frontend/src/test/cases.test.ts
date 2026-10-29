@@ -40,12 +40,13 @@ describe("Cases helpers (Phase 3 & 4)", () => {
 
   it("formats severity levels accurately", () => {
     expect(severityLabel("low")).toBe("Low");
-    expect(severityLabel("normal")).toBe("Normal");
+    expect(severityLabel("normal")).toBe("Medium");
+    expect(severityLabel("medium")).toBe("Medium");
     expect(severityLabel("high")).toBe("High");
     expect(severityLabel("critical")).toBe("Critical");
     expect(SEVERITY_LABELS.critical).toBe("Critical");
     expect(SEVERITY_VARIANTS.critical).toBe("danger");
-    expect(SEVERITY_VARIANTS.normal).toBe("neutral");
+    expect(SEVERITY_VARIANTS.normal).toBe("warning");
   });
 
   it("formats evidence file sizes correctly", () => {

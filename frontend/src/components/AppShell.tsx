@@ -65,6 +65,16 @@ export function AppShell() {
   const pendingDuplicates = state.duplicateCandidates.filter(
     (d) => d.review_status === "pending",
   ).length;
+  const pendingAssignments = state.submissions.filter(
+    (s) =>
+      s.institution_verified &&
+      !s.canonical_case_id &&
+      s.status !== "rejected" &&
+      !state.duplicateCandidates.some(
+        (d) => d.submission_id === s.id && d.review_status === "pending",
+      ),
+  ).length;
+  const totalIntakeTriagePending = pendingDuplicates + pendingAssignments;
   const unreadNotifications = visibleNotifications(
     rawState,
     simulationStore.getActivePersona(),
@@ -161,10 +171,10 @@ export function AppShell() {
                     <span className="opacity-80">
                       <IconDuplicate className="w-4 h-4" />
                     </span>
-                    <span>Duplicate review desk</span>
-                    {pendingDuplicates > 0 && (
+                    <span>Intake triage &amp; assignments</span>
+                    {totalIntakeTriagePending > 0 && (
                       <span className="sidebar-link-badge">
-                        {pendingDuplicates}
+                        {totalIntakeTriagePending}
                       </span>
                     )}
                   </NavLink>

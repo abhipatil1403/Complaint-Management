@@ -30,7 +30,7 @@ export const TASK_STATUS_VARIANTS: Record<
 
 export const PRIORITY_LABELS: Record<VerificationPriority, string> = {
   low: "Low",
-  normal: "Normal",
+  normal: "Medium",
   high: "High",
   critical: "Critical",
 };

@@ -98,7 +98,7 @@ export function HelpPage() {
           <h3 style={{ marginTop: 24 }}>Keyboard shortcuts</h3>
           <div className="settings-summary">
             <div>
-              <kbd>Ctrl / ⌘ + K</kbd>
+              <kbd>Ctrl / Cmd + K</kbd>
               <span>Global search</span>
             </div>
             <div>

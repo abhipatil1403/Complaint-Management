@@ -227,7 +227,7 @@ describe("Approved personas and role-specific workspaces", () => {
       </MemoryRouter>,
     );
     expect(
-      screen.getByRole("heading", { name: "Duplicate review desk" }),
+      screen.getByRole("heading", { name: "Intake triage & assignment desk" }),
     ).toBeTruthy();
     cleanup();
     simulationStore.switchPersona("case_officer");

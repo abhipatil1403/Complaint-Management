@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { IconCircleArrow, IconDownload, IconPlus } from "../components/Icons";
+import {
+  IconAlertTriangle,
+  IconCircleArrow,
+  IconDownload,
+  IconPlus,
+} from "../components/Icons";
 import { useAuth } from "../auth/AuthProvider";
 import {
   canReadCase,
@@ -106,7 +111,21 @@ export function HomePage() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-            <span style={{ fontSize: "1.3rem" }}>⚠️</span>
+            <div
+              style={{
+                width: "36px",
+                height: "36px",
+                borderRadius: "50%",
+                background: "#fef3c7",
+                border: "1px solid #f59e0b",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+              }}
+            >
+              <IconAlertTriangle className="w-5 h-5" style={{ color: "#d97706" }} />
+            </div>
             <div>
               <strong style={{ color: "#92400e", fontSize: "0.94rem", display: "block" }}>
                 Potential Overlapping Cases – Coordination Required

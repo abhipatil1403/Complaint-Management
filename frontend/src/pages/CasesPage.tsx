@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import {
+  IconAlertTriangle,
   IconClock,
   IconKanban,
   IconPlus,
@@ -17,6 +18,7 @@ import {
 import { scopedState, accessibleSubmissions } from "../simulation/scope";
 import { simulationStore } from "../simulation/simulationStore";
 import type { CasePriority, CaseStatus } from "../simulation/types";
+import { severityLabel } from "../lib/cases";
 
 const KANBAN_STAGES: Array<{ id: CaseStatus; title: string; color: string }> = [
   { id: "new", title: "New", color: "#eab308" },
@@ -367,9 +369,12 @@ export function CasesPage() {
               color: filterPill === "overlapping" ? "#ffffff" : "#92400e",
               background: filterPill === "overlapping" ? "#d97706" : "#fef3c7",
               fontWeight: 600,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.35rem",
             }}
           >
-            ⚠️ Overlapping Cases
+            <IconAlertTriangle className="w-3.5 h-3.5" /> Overlapping Cases
           </button>
         </div>
 
@@ -520,7 +525,7 @@ export function CasesPage() {
                     >
                       <div className="kanban-card-meta">
                         <span className={`badge badge-priority-${c.priority}`}>
-                          {c.priority.toUpperCase()}
+                          {severityLabel(c.priority).toUpperCase()}
                         </span>
                         {overlaps.length > 0 && (
                           <span
@@ -531,9 +536,12 @@ export function CasesPage() {
                               border: "1px solid #d97706",
                               fontSize: "0.68rem",
                               fontWeight: 700,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.2rem",
                             }}
                           >
-                            ⚠️ Overlap
+                            <IconAlertTriangle className="w-3 h-3" /> Overlap
                           </span>
                         )}
                         <span
@@ -679,9 +687,12 @@ export function CasesPage() {
                               border: "1px solid #d97706",
                               fontSize: "0.68rem",
                               fontWeight: 700,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.2rem",
                             }}
                           >
-                            ⚠️ Overlap
+                            <IconAlertTriangle className="w-3 h-3" /> Overlap
                           </span>
                         )}
                       </div>
@@ -731,7 +742,7 @@ export function CasesPage() {
                     </td>
                     <td>
                       <span className={`badge badge-priority-${c.priority}`}>
-                        {c.priority}
+                        {severityLabel(c.priority)}
                       </span>
                     </td>
                     <td>
@@ -877,7 +888,7 @@ export function CasesPage() {
                   onChange={(e) => setPriority(e.target.value as CasePriority)}
                 >
                   <option value="low">Low</option>
-                  <option value="normal">Normal</option>
+                  <option value="normal">Medium</option>
                   <option value="high">High</option>
                   <option value="critical">Critical</option>
                 </select>

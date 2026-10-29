@@ -7,11 +7,20 @@ import {
   useSimulation,
 } from "../simulation/selectors";
 import { RestrictedCase } from "../components/RestrictedCase";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import {
+  analyzeCaseWithGemini,
+  getGeminiApiKey,
+  setGeminiApiKey,
+  hasGeminiApiKey,
+  type GeminiAnalysisResult,
+} from "../lib/gemini";
+import {
   IconAlertTriangle,
+  IconBot,
+  IconCheck,
   IconClock,
   IconClose,
   IconDownload,
@@ -129,6 +138,31 @@ export function CaseDetailPage() {
   const [selectedBureauId, setSelectedBureauId] = useState("");
   const assignType: "lead" | "collaborating" = "collaborating";
   const [assignReason, setAssignReason] = useState("");
+
+  // Gemini AI States
+  const [geminiAnalysis, setGeminiAnalysis] = useState<GeminiAnalysisResult | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [showKeyModal, setShowKeyModal] = useState(false);
+  const [keyInput, setKeyInput] = useState(() => getGeminiApiKey());
+  const [keyNotice, setKeyNotice] = useState("");
+
+  useEffect(() => {
+    if (!caseItem) return;
+    const overlapping = getOverlappingCases(simState, caseItem.case_id);
+    analyzeCaseWithGemini(caseItem as any, overlapping, simState.submissions).then(setGeminiAnalysis);
+  }, [caseItem?.case_id]);
+
+  const handleRunAiAnalysis = async () => {
+    if (!caseItem) return;
+    setIsAnalyzing(true);
+    try {
+      const overlapping = getOverlappingCases(simState, caseItem.case_id);
+      const res = await analyzeCaseWithGemini(caseItem as any, overlapping, simState.submissions);
+      setGeminiAnalysis(res);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
   const [assignSubmitting, setAssignSubmitting] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
 
@@ -702,7 +736,11 @@ export function CaseDetailPage() {
       {/* Cross-Bureau Overlap Detection Banner (SIH Problem Statement 26264) */}
       {(() => {
         const overlappingCases = getOverlappingCases(simState, caseItem.case_id);
-        if (overlappingCases.length === 0) return null;
+        const duplicateMatch = simState.duplicateCandidates.find(
+          (d) => d.candidate_case_id === caseItem.case_id || d.submission_id === caseItem.source_submission_id,
+        );
+
+        if (overlappingCases.length === 0 && !duplicateMatch) return null;
 
         return (
           <div
@@ -735,11 +773,10 @@ export function CaseDetailPage() {
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    fontSize: "1.2rem",
                     flexShrink: 0,
                   }}
                 >
-                  ⚠️
+                  <IconAlertTriangle className="w-5 h-5" style={{ color: "#d97706" }} />
                 </div>
                 <div>
                   <h3
@@ -761,7 +798,7 @@ export function CaseDetailPage() {
                   >
                     AICTE OneDesk inter-bureau intelligence identified active parallel
                     investigation on <strong>{caseItem.institution_name}</strong> (AICTE Permanent ID:{" "}
-                    <strong>{caseItem.institution_code || "1-1002345671"}</strong>) across multiple Bureaus/Cells.
+                    <strong>{caseItem.institution_code || "PID-VERIFIED"}</strong>) across multiple Bureaus/Cells.
                     Joint coordination is required to prevent conflicting orders and duplicate proceedings.
                   </p>
                 </div>
@@ -778,6 +815,39 @@ export function CaseDetailPage() {
                 {overlappingCases.length} OVERLAPPING {overlappingCases.length === 1 ? "CASE" : "CASES"}
               </span>
             </div>
+
+            {duplicateMatch && (
+              <div
+                style={{
+                  background: "#ffffff",
+                  border: "1px dashed #f59e0b",
+                  borderRadius: "var(--radius-md)",
+                  padding: "0.75rem 1rem",
+                  marginBottom: "0.75rem",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  gap: "0.5rem",
+                  fontSize: "0.85rem",
+                }}
+              >
+                <div>
+                  <strong style={{ color: "#92400e" }}>Linked Duplicate Submission Candidate: </strong>
+                  <span>{duplicateMatch.submission_subject} ({duplicateMatch.submission_number})</span>
+                  <span className="badge badge-warning" style={{ marginLeft: "0.5rem", fontSize: "0.72rem" }}>
+                    {Math.round(duplicateMatch.similarity_score * 100)}% Match ({duplicateMatch.matching_method || "Heuristic Match"})
+                  </span>
+                </div>
+                <Link
+                  to={`/duplicate-review/candidates/${duplicateMatch.candidate_id}`}
+                  className="text-link"
+                  style={{ fontSize: "0.82rem", fontWeight: 600 }}
+                >
+                  View Side-by-Side Signal Match →
+                </Link>
+              </div>
+            )}
 
             <div
               style={{
@@ -851,9 +921,13 @@ export function CaseDetailPage() {
                       >
                         {otherCase.title}
                       </div>
-                      <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)" }}>
+                      <div style={{ fontSize: "0.78rem", color: "var(--color-text-secondary)", marginBottom: "0.25rem" }}>
                         Category: {otherCase.category_name} · Opened:{" "}
                         {formatDateTime(otherCase.opened_at)}
+                      </div>
+                      <div style={{ fontSize: "0.78rem", color: "#b45309", display: "flex", alignItems: "center", gap: "0.3rem" }}>
+                        <span>Overlap basis:</span>
+                        <strong>Same Institution ({caseItem.institution_code || "AICTE Permanent ID Match"}) concurrently active across {caseItem.lead_bureau_code} &amp; {otherCase.lead_bureau_code}</strong>
                       </div>
                     </div>
 
@@ -874,9 +948,12 @@ export function CaseDetailPage() {
                             border: "1px solid #10b981",
                             fontWeight: 600,
                             padding: "0.45rem 0.75rem",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "0.3rem",
                           }}
                         >
-                          ✓ Joint Review Active
+                          <IconCheck className="w-3.5 h-3.5" /> Joint Review Active
                         </span>
                       ) : (
                         <button
@@ -993,7 +1070,20 @@ export function CaseDetailPage() {
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                <span style={{ fontSize: "1.3rem" }}>🤖</span>
+                <div
+                  style={{
+                    width: "32px",
+                    height: "32px",
+                    borderRadius: "var(--radius-md)",
+                    background: "#dcfce7",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                  }}
+                >
+                  <IconBot className="w-5 h-5" style={{ color: "#166534" }} />
+                </div>
                 <div>
                   <h3 style={{ margin: 0, fontSize: "1.05rem", color: "#166534" }}>
                     AI Case Triage &amp; Regulatory Synopsis
@@ -1003,31 +1093,48 @@ export function CaseDetailPage() {
                   </p>
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                 <span
                   className="badge"
                   style={{
-                    background: "#dcfce7",
-                    color: "#166534",
-                    border: "1px solid #86efac",
+                    background: geminiAnalysis?.isLiveGemini ? "#dbeafe" : "#dcfce7",
+                    color: geminiAnalysis?.isLiveGemini ? "#1e40af" : "#166534",
+                    border: `1px solid ${geminiAnalysis?.isLiveGemini ? "#93c5fd" : "#86efac"}`,
                     fontWeight: 700,
                     fontSize: "0.78rem",
                   }}
                 >
-                  {caseItem.ai_confidence_score || 94}% Confidence · AICTE-Norms-v2.4
+                  {geminiAnalysis?.modelUsed || (hasGeminiApiKey() ? "Google Gemini 2.0 Flash (Live)" : "AICTE-Norms-v2.4")}
                 </span>
                 <span
                   className="badge"
                   style={{
-                    background: caseItem.priority === "critical" ? "#fee2e2" : "#fef3c7",
-                    color: caseItem.priority === "critical" ? "#991b1b" : "#92400e",
+                    background: (geminiAnalysis?.priority || caseItem.priority) === "critical" ? "#fee2e2" : "#fef3c7",
+                    color: (geminiAnalysis?.priority || caseItem.priority) === "critical" ? "#991b1b" : "#92400e",
                     border: "1px solid #fca5a5",
                     fontSize: "0.78rem",
                     fontWeight: 700,
                   }}
                 >
-                  {caseItem.ai_sentiment_urgency || (caseItem.priority === "critical" ? "Critical Urgency" : "High Urgency")}
+                  {geminiAnalysis?.urgency_rating || (caseItem.priority === "critical" ? "Critical Urgency" : "High Urgency")}
                 </span>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={isAnalyzing}
+                  onClick={handleRunAiAnalysis}
+                  style={{ fontSize: "0.78rem", padding: "0.3rem 0.65rem" }}
+                >
+                  {isAnalyzing ? "Analyzing..." : "Re-run Triage"}
+                </button>
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => setShowKeyModal(true)}
+                  style={{ fontSize: "0.78rem", padding: "0.3rem 0.5rem", color: "#166534" }}
+                >
+                  {hasGeminiApiKey() ? "Gemini Key Configured" : "+ Add Gemini API Key"}
+                </button>
               </div>
             </div>
 
@@ -1044,9 +1151,121 @@ export function CaseDetailPage() {
               }}
             >
               <strong style={{ color: "#166534" }}>Automated Finding: </strong>
-              {caseItem.ai_summary ||
+              {geminiAnalysis?.synopsis ||
+                caseItem.ai_summary ||
                 "Rule engine identified potential statutory non-compliance. Cross-referenced AICTE permanent institution repository and parallel cell registries."}
             </div>
+
+            {/* Extracted Norms and Entities */}
+            {geminiAnalysis && (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                  gap: "0.75rem",
+                  marginBottom: "0.85rem",
+                }}
+              >
+                {geminiAnalysis.statutory_clauses?.length > 0 && (
+                  <div
+                    style={{
+                      background: "#f8fafc",
+                      padding: "0.65rem 0.85rem",
+                      borderRadius: "var(--radius-sm)",
+                      border: "1px solid #e2e8f0",
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: "block",
+                        fontSize: "0.72rem",
+                        textTransform: "uppercase",
+                        fontWeight: 700,
+                        color: "#475569",
+                        marginBottom: "0.35rem",
+                      }}
+                    >
+                      Statutory Clauses &amp; AICTE Regulations
+                    </span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                      {geminiAnalysis.statutory_clauses.map((clause, idx) => (
+                        <span
+                          key={idx}
+                          className="badge"
+                          style={{
+                            background: "#ecfdf5",
+                            color: "#065f46",
+                            border: "1px solid #a7f3d0",
+                            fontSize: "0.72rem",
+                          }}
+                        >
+                          {clause}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {geminiAnalysis.extracted_entities?.length > 0 && (
+                  <div
+                    style={{
+                      background: "#f8fafc",
+                      padding: "0.65rem 0.85rem",
+                      borderRadius: "var(--radius-sm)",
+                      border: "1px solid #e2e8f0",
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: "block",
+                        fontSize: "0.72rem",
+                        textTransform: "uppercase",
+                        fontWeight: 700,
+                        color: "#475569",
+                        marginBottom: "0.35rem",
+                      }}
+                    >
+                      Extracted Named Entities &amp; Citations
+                    </span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                      {geminiAnalysis.extracted_entities.map((ent, idx) => (
+                        <span
+                          key={idx}
+                          className="badge"
+                          style={{
+                            background: "#eff6ff",
+                            color: "#1e40af",
+                            border: "1px solid #bfdbfe",
+                            fontSize: "0.72rem",
+                          }}
+                        >
+                          {ent}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Overlap Mitigation Action if present */}
+            {geminiAnalysis?.overlap_action && (
+              <div
+                style={{
+                  background: "#fffbeb",
+                  border: "1px solid #fcd34d",
+                  borderRadius: "var(--radius-sm)",
+                  padding: "0.65rem 0.85rem",
+                  marginBottom: "0.85rem",
+                  fontSize: "0.82rem",
+                  color: "#92400e",
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong>Inter-Bureau Conflict Mitigation: </strong>
+                {geminiAnalysis.overlap_action}
+              </div>
+            )}
 
             <div
               style={{
@@ -1075,7 +1294,8 @@ export function CaseDetailPage() {
                   Suggested Next Action Required
                 </span>
                 <strong style={{ fontSize: "0.9rem", color: "#155a37" }}>
-                  {caseItem.ai_suggested_next_action ||
+                  {geminiAnalysis?.suggested_action ||
+                    caseItem.ai_suggested_next_action ||
                     caseItem.next_action_required ||
                     "Serve regulatory directive to Principal within 3 working days"}
                 </strong>
@@ -1092,7 +1312,7 @@ export function CaseDetailPage() {
                   }}
                   onClick={() => {
                     setNoteText(
-                      `[AI Recommended Action] ${caseItem.ai_suggested_next_action || caseItem.next_action_required || "Serve regulatory directive"}`,
+                      `[AI Recommended Action] ${geminiAnalysis?.suggested_action || caseItem.ai_suggested_next_action || caseItem.next_action_required || "Serve regulatory directive"}`,
                     );
                     setShowNoteModal(true);
                   }}
@@ -2598,6 +2818,89 @@ export function CaseDetailPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 8: GEMINI API KEY CONFIGURATION */}
+      {showKeyModal && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setShowKeyModal(false)}
+        >
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Configure Google Gemini API Key</h3>
+              <button
+                type="button"
+                className="btn-icon-close"
+                onClick={() => setShowKeyModal(false)}
+              >
+                <IconClose className="w-4 h-4" />
+              </button>
+            </div>
+            <div style={{ padding: "1rem 1.5rem" }}>
+              <p className="small muted" style={{ marginTop: 0 }}>
+                Enter your Google Gemini API key to activate live generative triage, legal entity extraction, and regulatory synopses powered by Google Gemini 2.0 Flash.
+              </p>
+              <label style={{ display: "block", marginBottom: "1rem" }}>
+                API Key
+                <input
+                  type="password"
+                  placeholder="AIzaSy..."
+                  value={keyInput}
+                  onChange={(e) => {
+                    setKeyInput(e.target.value);
+                    setKeyNotice("");
+                  }}
+                  style={{ width: "100%", fontFamily: "monospace", marginTop: "0.25rem" }}
+                />
+                <span className="small muted">
+                  Key is saved locally in browser storage. Obtain a key at{" "}
+                  <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ textDecoration: "underline" }}>
+                    Google AI Studio
+                  </a>.
+                </span>
+              </label>
+
+              {keyNotice && (
+                <div className="callout callout-info" style={{ marginBottom: "1rem", fontSize: "0.85rem" }}>
+                  {keyNotice}
+                </div>
+              )}
+
+              <div className="modal-footer" style={{ padding: 0 }}>
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => {
+                    setKeyInput("");
+                    setGeminiApiKey("");
+                    setKeyNotice("API Key removed. Reverted to built-in dynamic legal engine.");
+                  }}
+                >
+                  Clear Key
+                </button>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => setShowKeyModal(false)}
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={async () => {
+                    setGeminiApiKey(keyInput.trim());
+                    setShowKeyModal(false);
+                    await handleRunAiAnalysis();
+                  }}
+                >
+                  Save &amp; Run Live Triage
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

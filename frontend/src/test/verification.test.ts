@@ -27,7 +27,7 @@ describe("Verification helpers", () => {
 
   it("formats priority labels", () => {
     expect(priorityLabel("low")).toBe("Low");
-    expect(priorityLabel("normal")).toBe("Normal");
+    expect(priorityLabel("normal")).toBe("Medium");
     expect(priorityLabel("high")).toBe("High");
     expect(priorityLabel("critical")).toBe("Critical");
     expect(PRIORITY_LABELS.critical).toBe("Critical");

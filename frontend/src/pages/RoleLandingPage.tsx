@@ -698,6 +698,7 @@ export function ReviewWorkspace({
   const { activePersona, has } = useAuth();
   const raw = useSimulation();
   const state = scopedState(raw, activePersona);
+  const [activeTab, setActiveTab] = useState<"all" | "duplicates" | "assignments">("all");
   if (!has(kind === "verification" ? "institution.verify" : "duplicate.review"))
     return <PermissionDeniedPage />;
   const tasks = state.verificationTasks;
@@ -726,12 +727,12 @@ export function ReviewWorkspace({
           <h1>
             {kind === "verification"
               ? "Institution verification desk"
-              : "Duplicate review desk"}
+              : "Intake triage & assignment desk"}
           </h1>
           <p className="page-description">
             {kind === "verification"
               ? "Resolve institution identity and correction tasks before ordinary case creation."
-              : "Compare candidate cases, record human decisions, and prepare distinct issues for case creation."}
+              : "Consolidated intake queue: review AI/heuristic duplicate candidates and route verified new submissions for case creation and bureau assignment."}
           </p>
         </div>
         <Link
@@ -806,7 +807,7 @@ export function ReviewWorkspace({
           <Kpis
             items={[
               {
-                label: "Pending candidate reviews",
+                label: "Pending duplicate reviews",
                 value: candidates.filter((d) => d.review_status === "pending")
                   .length,
                 to: "/duplicate-review",
@@ -822,7 +823,7 @@ export function ReviewWorkspace({
                 detail: "0.90 or higher; human review required",
               },
               {
-                label: "Ready for case creation",
+                label: "Ready for case creation & assignment",
                 value: ready.length,
                 to: "/intake?ready=true",
                 detail: "Verified, unlinked, reviewed submissions",
@@ -836,56 +837,102 @@ export function ReviewWorkspace({
               },
             ]}
           />
-          <div className="grid grid-2 role-workspace-columns">
-            <article className="card">
-              <h2>Candidate comparisons</h2>
-              <div className="role-case-list">
-                {candidates
-                  .filter((d) => d.review_status === "pending")
-                  .map((d) => (
+
+          {/* Differentiated Queue Switcher */}
+          <div className="pill-tabs" style={{ marginBottom: "1.25rem" }}>
+            <button
+              type="button"
+              className={`pill-tab ${activeTab === "all" ? "active" : ""}`}
+              onClick={() => setActiveTab("all")}
+            >
+              All Triage Items ({candidates.filter((d) => d.review_status === "pending").length + ready.length})
+            </button>
+            <button
+              type="button"
+              className={`pill-tab ${activeTab === "duplicates" ? "active" : ""}`}
+              onClick={() => setActiveTab("duplicates")}
+            >
+              Duplicate Review Candidates ({candidates.filter((d) => d.review_status === "pending").length})
+            </button>
+            <button
+              type="button"
+              className={`pill-tab ${activeTab === "assignments" ? "active" : ""}`}
+              onClick={() => setActiveTab("assignments")}
+            >
+              New Submissions Ready for Assignment ({ready.length})
+            </button>
+          </div>
+
+          <div className={activeTab === "all" ? "grid grid-2 role-workspace-columns" : "stack"}>
+            {(activeTab === "all" || activeTab === "duplicates") && (
+              <article className="card">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+                  <h2 style={{ margin: 0 }}>Duplicate Review Candidates</h2>
+                  <span className="badge badge-warning" style={{ fontSize: "0.75rem" }}>Human Review Mandatory</span>
+                </div>
+                <p className="small muted" style={{ marginTop: 0, marginBottom: "1rem" }}>
+                  Suspected duplicate complaint submissions matched against active canonical cases. Officer verification required.
+                </p>
+                <div className="role-case-list">
+                  {candidates
+                    .filter((d) => d.review_status === "pending")
+                    .map((d) => (
+                      <Link
+                        key={d.id}
+                        to={`/duplicate-review/candidates/${d.candidate_id}`}
+                      >
+                        <div>
+                          <small>{d.case_number}</small>
+                          <strong>{d.submission_subject}</strong>
+                          <span>{d.submission_institution_name}</span>
+                        </div>
+                        <span className="badge badge-pending">
+                          {Math.round(d.similarity_score * 100)}% match
+                        </span>
+                      </Link>
+                    ))}
+                  {!candidates.filter((d) => d.review_status === "pending").length && (
+                    <p className="empty-state">No pending duplicate candidates.</p>
+                  )}
+                </div>
+              </article>
+            )}
+
+            {(activeTab === "all" || activeTab === "assignments") && (
+              <article className="card">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+                  <h2 style={{ margin: 0 }}>New Submissions Ready for Assignment</h2>
+                  <span className="badge badge-success" style={{ fontSize: "0.75rem" }}>Verified &amp; Distinct</span>
+                </div>
+                <p className="small muted" style={{ marginTop: 0, marginBottom: "1rem" }}>
+                  Institution verified and confirmed distinct. Route to the appropriate Bureau/Cell and assign lead officer.
+                </p>
+                <div className="role-case-list">
+                  {ready.map((s) => (
                     <Link
-                      key={d.id}
-                      to={`/duplicate-review/candidates/${d.candidate_id}`}
+                      key={s.id}
+                      to={
+                        has("case.create")
+                          ? `/cases?createFrom=${s.id}`
+                          : `/intake/${s.id}`
+                      }
                     >
                       <div>
-                        <small>{d.case_number}</small>
-                        <strong>{d.submission_subject}</strong>
-                        <span>{d.submission_institution_name}</span>
+                        <small>{s.submission_number}</small>
+                        <strong>{s.subject}</strong>
+                        <span>Review &amp; create canonical case →</span>
                       </div>
-                      <span className="badge badge-pending">
-                        {Math.round(d.similarity_score * 100)}% match
-                      </span>
                     </Link>
                   ))}
-              </div>
-            </article>
-            <article className="card">
-              <h2>Distinct issues ready for routing</h2>
-              <div className="role-case-list">
-                {ready.map((s) => (
-                  <Link
-                    key={s.id}
-                    to={
-                      has("case.create")
-                        ? `/cases?createFrom=${s.id}`
-                        : `/intake/${s.id}`
-                    }
-                  >
-                    <div>
-                      <small>{s.submission_number}</small>
-                      <strong>{s.subject}</strong>
-                      <span>Review & create canonical case →</span>
-                    </div>
-                  </Link>
-                ))}
-                {!ready.length && (
-                  <p className="empty-state">
-                    Complete institution and duplicate review to release
-                    submissions for case creation.
-                  </p>
-                )}
-              </div>
-            </article>
+                  {!ready.length && (
+                    <p className="empty-state">
+                      Complete institution and duplicate review to release
+                      submissions for case creation.
+                    </p>
+                  )}
+                </div>
+              </article>
+            )}
           </div>
         </>
       )}

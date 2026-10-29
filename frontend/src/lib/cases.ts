@@ -34,7 +34,7 @@ export const CASE_STATUS_VARIANTS: Record<string, "neutral" | "warning" | "succe
 
 export const SEVERITY_LABELS: Record<string, string> = {
   low: "Low",
-  normal: "Normal",
+  normal: "Medium",
   medium: "Medium",
   high: "High",
   critical: "Critical",
@@ -46,7 +46,7 @@ export function severityLabel(severity: string): string {
 
 export const SEVERITY_VARIANTS: Record<string, "neutral" | "warning" | "success" | "danger"> = {
   low: "neutral",
-  normal: "neutral",
+  normal: "warning",
   medium: "warning",
   high: "danger",
   critical: "danger",

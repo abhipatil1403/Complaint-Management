@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthProvider";
+import { IconAlertTriangle } from "../components/Icons";
 import {
   EmptyState,
   ErrorPanel,
@@ -269,7 +270,21 @@ function InstitutionCaseHistorySection({
             gap: "0.75rem",
           }}
         >
-          <span style={{ fontSize: "1.2rem" }}>⚠️</span>
+          <div
+            style={{
+              width: "32px",
+              height: "32px",
+              borderRadius: "50%",
+              background: "#fef3c7",
+              border: "1px solid #f59e0b",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <IconAlertTriangle className="w-4 h-4" style={{ color: "#d97706" }} />
+          </div>
           <div>
             <strong style={{ color: "#92400e", fontSize: "0.92rem", display: "block" }}>
               Potential Overlapping Cases – Coordination Required
